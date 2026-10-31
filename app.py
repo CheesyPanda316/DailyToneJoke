@@ -2,10 +2,12 @@ import json
 import os
 import re
 from datetime import datetime
+import threading
 import discord
 from discord.ext import commands, tasks
 from pypinyin import pinyin, Style
-from flask import Flask # 💡 引入最輕量、不卡死非同步核心的網頁套件
+from flask import Flask
+import pytz  # 💡 引入時區套件
 
 # ==============================================================================
 # 0. 關鍵防禦：使用 Flask 在背景提供流暢不卡死的網頁埠，徹底騙過 Render
@@ -18,10 +20,8 @@ def home():
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
-    # 關閉除錯模式，以最省資源、不干擾 Discord 的方式在背景靈敏執行
     app.run(host='0.0.0.0', port=port)
 
-import threading
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # ==============================================================================
@@ -30,7 +30,7 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 TOKEN = os.environ.get("DISCORD_TOKEN")  
 
 MY_SCHEDULED_TONES = {
-    "2026-10-30": "242",  # 徹底防禦海外伺服器時差
+    "2026-10-30": "242",
     "2026-10-31": "242",  # 今日密碼：242
     "2026-11-01": "124",    
     "2026-11-02": "311",   
@@ -38,10 +38,9 @@ MY_SCHEDULED_TONES = {
 
 STATS_FILE = "user_leaderboard.json"
 
-intents = discord.Intents.default()
-intents.message_content = True  
+# 🚨 【強制全開】最暴力的特權開啟宣告法，直接杜絕任何順序出錯的可能
+intents = discord.Intents.all() 
 
-# 💡 換回專門處理訊息監聽的 commands.Bot 核心
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 TARGET_CHANNEL_ID = None  
@@ -77,7 +76,9 @@ async def midnight_alarm():
     if TARGET_CHANNEL_ID is None:
         return
 
-    now = datetime.now()
+    tz = pytz.timezone('Asia/Taipei')
+    now = datetime.now(tz)
+    
     if now.hour == 0:
         channel = bot.get_channel(TARGET_CHANNEL_ID)
         if not channel:
@@ -93,7 +94,7 @@ async def midnight_alarm():
             await channel.send(embed=embed)
 
 # ==============================================================================
-# 4. 斜線指令專區：/listen 與 /unlisten（完美相容架構）
+# 4. 斜線指令專區：/listen 與 /unlisten
 # ==============================================================================
 @bot.tree.command(name="listen", description="開始在此文字頻道偵測每日聲調笑話")
 async def start_listening(interaction: discord.Interaction):
@@ -108,40 +109,39 @@ async def stop_listening(interaction: discord.Interaction):
     await interaction.response.send_message("❌ 機器人已取消頻道導入！")
 
 # ==============================================================================
-# 5. 監聽頻道訊息：雙軌並行，完全解放耳朵
+# 5. 監聽頻道訊息（最前線除錯＋時區校正版）
 # ==============================================================================
 @bot.event
 async def on_message(message):
     try:
-        # 1. 絕對防禦：如果是機器人自己發的訊息，直接跳過
         if message.author.bot:
             return
 
-        # 2. 絕對防禦：排除斜線指令或隱形指令格式
         user_sentence = message.content.strip()
         if user_sentence.startswith("/") or user_sentence.startswith("!"):
             return
 
-        # 🚨 【終極偵錯點】只要程式有走到這裡，不管頻道對不對，一律在原頻道噴出報告！
-        # 這樣能直接測出：機器人到底有沒有「聽見」你的常規訊息！
+        # 🚨 【前線大廣播】只要收到常規訊息，不認頻道、不認日期，一律先噴出這份報告！
         try:
             test_tone = convert_chinese_to_tone_code(user_sentence) if user_sentence else "空字串"
             await message.channel.send(
                 f"📢 **【測試核心連通】**\n"
                 f"• 聽到內容：`{user_sentence}`\n"
                 f"• 解析聲調：`{test_tone}`\n"
-                f"• 當前鎖定頻道 ID：`{TARGET_CHANNEL_ID}`\n"
-                f"• 當前訊息頻道 ID：`{message.channel.id}`"
+                f"• 鎖定頻道 ID：`{TARGET_CHANNEL_ID}`\n"
+                f"• 當前頻道 ID：`{message.channel.id}`"
             )
         except Exception as msg_err:
-            print(f"❌ 偵錯訊息發送失敗: {msg_err}")
+            print(f"❌ 傳送測試訊息失敗: {msg_err}")
 
-        # 3. 頻道鎖定檢查
+        # 頻道鎖定檢查
         if TARGET_CHANNEL_ID is None or message.channel.id != TARGET_CHANNEL_ID:
             return
 
-        # 4. 日期與聲調正式比對
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        # 強制指定台北時區
+        tz = pytz.timezone('Asia/Taipei')
+        today_str = datetime.now(tz).strftime("%Y-%m-%d")
+        
         if today_str not in MY_SCHEDULED_TONES:
             return
 
@@ -163,7 +163,6 @@ async def on_message(message):
             
             times = stats[user_id]["correct"]
             await message.channel.send(f"⚠️ {message.author.mention} 你已經講了 {times} 次每日聲調笑話。")
-            
     except Exception as e:
         print(f"❌ 錯誤攔截: {e}")
 
