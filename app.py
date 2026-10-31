@@ -7,10 +7,10 @@ import discord
 from discord.ext import commands, tasks
 from pypinyin import pinyin, Style
 from flask import Flask
-import pytz  # 💡 引入時區套件
+import pytz
 
 # ==============================================================================
-# 0. 關鍵防禦：使用 Flask 在背景提供流暢不卡死的網頁埠，徹底騙過 Render
+# 0. 背景流暢網頁埠
 # ==============================================================================
 app = Flask(__name__)
 
@@ -25,7 +25,7 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # ==============================================================================
-# 1. 設定與大老闆排程專區
+# 1. 核心宣告（強制全權限）
 # ==============================================================================
 TOKEN = os.environ.get("DISCORD_TOKEN")  
 
@@ -38,15 +38,14 @@ MY_SCHEDULED_TONES = {
 
 STATS_FILE = "user_leaderboard.json"
 
-# 🚨 【強制全開】最暴力的特權開啟宣告法，直接杜絕任何順序出錯的可能
-intents = discord.Intents.all() 
-
+# 強制開啟全部特權
+intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 TARGET_CHANNEL_ID = None  
 
 # ==============================================================================
-# 2. 核心技術與資料庫讀寫
+# 2. 輔助函式
 # ==============================================================================
 def convert_chinese_to_tone_code(text):
     clean_text = "".join(re.findall(r"[\u4e00-\u9fa5]", text))
@@ -109,36 +108,33 @@ async def stop_listening(interaction: discord.Interaction):
     await interaction.response.send_message("❌ 機器人已取消頻道導入！")
 
 # ==============================================================================
-# 5. 監聽頻道訊息（最前線除錯＋時區校正版）
+# 5. 獨立常規訊息監聽：不綁定任何前置條件
 # ==============================================================================
-@bot.event
-async def on_message(message):
+@bot.listen("on_message") # 💡 使用獨立事件監聽器，防止被常規事件核心卡死吞掉
+async def handle_user_msg(message):
     try:
+        # 排除自己的機器人
         if message.author.bot:
             return
 
         user_sentence = message.content.strip()
+        # 排除指令字串
         if user_sentence.startswith("/") or user_sentence.startswith("!"):
             return
 
-        # 🚨 【前線大廣播】只要收到常規訊息，不認頻道、不認日期，一律先噴出這份報告！
-        try:
-            test_tone = convert_chinese_to_tone_code(user_sentence) if user_sentence else "空字串"
-            await message.channel.send(
-                f"📢 **【測試核心連通】**\n"
-                f"• 聽到內容：`{user_sentence}`\n"
-                f"• 解析聲調：`{test_tone}`\n"
-                f"• 鎖定頻道 ID：`{TARGET_CHANNEL_ID}`\n"
-                f"• 當前頻道 ID：`{message.channel.id}`"
-            )
-        except Exception as msg_err:
-            print(f"❌ 傳送測試訊息失敗: {msg_err}")
+        # 🚨 【最底層防禦測試】只要能拿到字，立刻回覆！
+        test_tone = convert_chinese_to_tone_code(user_sentence)
+        await message.channel.send(
+            f"📢 **【測試核心連通】**\n"
+            f"• 聽到內容：`{user_sentence}`\n"
+            f"• 解析聲調：`{test_tone}`"
+        )
 
-        # 頻道鎖定檢查
+        # 檢查頻道鎖定
         if TARGET_CHANNEL_ID is None or message.channel.id != TARGET_CHANNEL_ID:
             return
 
-        # 強制指定台北時區
+        # 台北時間日期比對
         tz = pytz.timezone('Asia/Taipei')
         today_str = datetime.now(tz).strftime("%Y-%m-%d")
         
@@ -146,12 +142,11 @@ async def on_message(message):
             return
 
         target_tone = MY_SCHEDULED_TONES[today_str]
-        user_tone = convert_chinese_to_tone_code(user_sentence)
 
-        if len(user_tone) != len(target_tone) or len(user_tone) == 0:
+        if len(test_tone) != len(target_tone) or len(test_tone) == 0:
             return
 
-        if user_tone == target_tone:
+        if test_tone == target_tone:
             user_id = str(message.author.id)
             stats = load_stats()
 
@@ -162,7 +157,7 @@ async def on_message(message):
             save_stats(stats)
             
             times = stats[user_id]["correct"]
-            await message.channel.send(f"⚠️ {message.author.mention} 你已經講了 {times} 次每日聲調笑話。")
+            await message.channel.send(f"🎉 **成功觸發！** {message.author.mention} 你已經講了 {times} 次每日聲調笑話。")
     except Exception as e:
         print(f"❌ 錯誤攔截: {e}")
 
@@ -173,8 +168,9 @@ async def on_message(message):
 async def on_ready():
     print(f"🤖 機器人 {bot.user.name} 已成功滿血上線！")
     try:
-        synced = await bot.tree.sync()
-        print(f"✨ 成功同步了 {len(synced)} 個斜線指令！")
+        # 💡 非同步同步斜線指令，不阻塞監聽核心
+        await bot.tree.sync()
+        print("✨ 斜線指令同步完成！")
     except Exception as e:
         print(f"❌ 同步斜線指令錯誤: {e}")
         
