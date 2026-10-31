@@ -2,7 +2,7 @@ import json
 import os
 import re
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import discord
 from discord.ext import commands, tasks
 from pypinyin import pinyin, Style
@@ -46,10 +46,11 @@ MY_SCHEDULED_TONES = {
 
 intents = discord.Intents.default()
 intents.message_content = True  
+intents.members = True  # 排行榜撈暱稱核心，請確保 Developer Portal 已開啟 Server Members Intent
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 💡 完美防呆：將你截圖中的頻道 ID 直接固定，開機自動鎖定
+# 💡 固底防呆：固定文字頻道 ID（對應你的指定文字頻道）
 TARGET_CHANNEL_ID = 1564653924169023489  
 
 # ==============================================================================
@@ -67,80 +68,97 @@ def convert_chinese_to_tone_code(text):
         
     return tone_code
 
-# 💡 從頻道的簡介中讀取資料
+# 從頻道的簡介中讀取資料
 async def load_stats_from_channel():
-    channel = bot.get_channel(TARGET_CHANNEL_ID)
-    if not channel:
-        return {}
-    
-    topic = channel.topic
-    if not topic:
-        return {}
-    
-    # 使用正規表達式撈出隱藏在簡介裡的 JSON 資料
-    match = re.search(r"DATA_START({.*})DATA_END", topic)
-    if match:
-        try:
-            return json.loads(match.group(1))
-        except Exception as e:
-            print(f"❌ 解析簡介資料失敗: {e}")
+    try:
+        channel = bot.get_channel(TARGET_CHANNEL_ID)
+        if not channel or not channel.topic:
             return {}
+        
+        match = re.search(r"DATA_START({.*})DATA_END", channel.topic)
+        if match:
+            return json.loads(match.group(1))
+    except Exception as e:
+        print(f"❌ 解析簡介資料失敗: {e}")
     return {}
 
-# 💡 將資料寫回頻道的簡介中保存
+# 將資料寫回頻道的簡介中保存
 async def save_stats_to_channel(data):
-    channel = bot.get_channel(TARGET_CHANNEL_ID)
-    if not channel:
-        return
-    
-    json_str = json.dumps(data, ensure_ascii=False)
-    new_topic = f"每日指定聲調挑戰頻道 ｜ 機器人紀錄專區 [請勿刪除後方資料]\nDATA_START{json_str}DATA_END"
-    
     try:
-        await channel.edit(topic=new_topic)
-    except Exception as e:
-        print(f"❌ 寫入頻道簡介失敗 (可能缺少管理頻道權限): {e}")
-
-# ==============================================================================
-# 3. 每日 00:00 聲調笑話警報器
-# ==============================================================================
-@tasks.loop(hours=1)
-async def midnight_alarm():
-    now = datetime.now()
-    if now.hour == 0:
         channel = bot.get_channel(TARGET_CHANNEL_ID)
         if not channel:
             return
+        
+        json_str = json.dumps(data, ensure_ascii=False)
+        new_topic = f"每日指定聲調挑戰頻道 ｜ 機器人紀錄專區 [請勿刪除後方資料]\nDATA_START{json_str}DATA_END"
+        await channel.edit(topic=new_topic)
+    except Exception as e:
+        print(f"❌ 寫入頻道簡介失敗: {e}")
+
+# ==============================================================================
+# 3. 🚨 核心新功能：每日 00:00 結算昨夜排行榜 ＆ 重設並發布今日全新挑戰 🚨
+# ==============================================================================
+@tasks.loop(minutes=1)  # 縮短檢查頻率到每分鐘，配合 UptimeRobot 絕不漏掉 00:00
+async def midnight_scheduler():
+    now = datetime.now()
+    
+    # 💡 只有在精準 00:00 的這一分鐘才執行結算與重設
+    if now.hour == 0 and now.minute == 0:
+        channel = bot.get_channel(TARGET_CHANNEL_ID)
+        if not channel:
+            return
+
+        # 1. 撈出昨天的紀錄並公佈最終排行榜
+        stats = await load_stats_from_channel()
+        yesterday_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        
+        embed_end = discord.Embed(
+            title=f"🏆 【{yesterday_str}】今日聲調造句挑戰 ｜ 最終榮譽榜 🏆",
+            description="昨天的挑戰已經結束！以下是最終勝出的前 10 名大師：\n───────────────────",
+            color=0xf1c40f
+        )
+        
+        if stats:
+            sorted_stats = sorted(stats.items(), key=lambda x: x[1]["correct"], reverse=True)
+            leaderboard_text = ""
+            for index, (user_id, info) in enumerate(sorted_stats[:10], start=1):
+                leaderboard_text += f"🥇 第 {index} 名 ｜ {info['name']} ── 💥 成功觸發 **{info['correct']}** 次！\n"
+            embed_end.description += f"\n{leaderboard_text}"
+        else:
+            embed_end.description += "\n😭 昨天竟然沒有人挑戰成功，大家都太害羞了！"
+            
+        await channel.send(embed=embed_end)
+        
+        # 2. 核心重設：清空頻道簡介裡的紀錄（新的一天歸零開始）
+        await save_stats_to_channel({})
+        print(f"[System] 跨日 00:00！昨日紀錄已結算，資料庫已成功歸零重置。")
+
+        # 3. 發布今天全新的聲調密碼挑戰警報
         today_str = now.strftime("%Y-%m-%d")
         if today_str in MY_SCHEDULED_TONES:
             target_tone = MY_SCHEDULED_TONES[today_str]
-            embed = discord.Embed(
-                title="🚨 每日聲調造句挑戰警報！",
-                description=f"全新的一天開始了！今天的目標聲調密碼是：\n\n➡️ **【 {target_tone} 】**\n\n請直接在此頻道打字挑戰！",
+            embed_start = discord.Embed(
+                title="🚨 全新一日！今日指定聲調造句挑戰開始！",
+                description=f"全新的一天開始了！今天的目標聲調密碼是：\n\n➡️ **【 {target_tone} 】**\n\n昨日分數已全面歸零，大家快來搶下今天的第一分吧！",
                 color=0x27ae60
             )
-            await channel.send(embed=embed)
+            await channel.send(embed=embed_start)
 
 # ==============================================================================
-# 4. 常規維護指令
+# 4. 常規維護與斜線指令
 # ==============================================================================
 @bot.command(name="sync")
 async def sync_commands(ctx):
-    await ctx.send("⏳ 正在向 Discord 伺服器同步斜線指令，請稍候...")
+    await ctx.send("⏳ 正在向 Discord 伺服器同步斜線指令...")
     try:
         synced = await bot.tree.sync()
-        await ctx.send(f"✨ 成功同步了 {len(synced)} 個斜線指令！請重新整理 Discord（F5）後測試。")
+        await ctx.send(f"✨ 成功同步了 {len(synced)} 個斜線指令！請重整 Discord（F5）測試。")
     except Exception as e:
         await ctx.send(f"❌ 同步失敗: {e}")
 
-# ==============================================================================
-# 5. 斜線指令專區（包含全新排行榜查詢功能）
-# ==============================================================================
-@bot.tree.command(name="listen", description="手動重新鎖定此頻道")
+@bot.tree.command(name="listen", description="檢查頻道鎖定狀態")
 async def start_listening(interaction: discord.Interaction):
-    global TARGET_CHANNEL_ID
-    TARGET_CHANNEL_ID = interaction.channel_id
-    await interaction.response.send_message("✅ 頻道已重設！機器人已鎖定此頻道進行偵測與每日 00:00 警報！")
+    await interaction.response.send_message("✅ 頻道已由後台自動固底鎖定，無需手動變更，即可直接開始挑戰！")
 
 @bot.tree.command(name="check", description="檢查中文字在機器人眼中的聲調密碼")
 @discord.app_commands.describe(text="想要查詢聲調的中文字或句子")
@@ -148,26 +166,25 @@ async def check_tone(interaction: discord.Interaction, text: str):
     tone = convert_chinese_to_tone_code(text)
     await interaction.response.send_message(f"🔍 「{text}」在機器人眼中的聲調密碼是：**【 {tone} 】**")
 
-# 💡 新增：排行榜查詢功能，讓大家隨時看累積次數
-@bot.tree.command(name="leaderboard", description="查看本頻道的聲調挑戰排行榜")
+@bot.tree.command(name="leaderboard", description="查看今日即時挑戰排行榜")
 async def leaderboard(interaction: discord.Interaction):
     stats = await load_stats_from_channel()
     if not stats:
-        await interaction.response.send_message("📊 目前還沒有任何挑戰紀錄喔！大家快來挑戰吧！")
+        await interaction.response.send_message("📊 今天新一輪的挑戰還沒有人上榜喔！快來搶頭香！")
         return
     
-    # 依成功次數由大到小排序
     sorted_stats = sorted(stats.items(), key=lambda x: x[1]["correct"], reverse=True)
     
-    leaderboard_text = "🏆 **【 每日聲調造句挑戰 ｜ 榮譽排行榜 】** 🏆\n"
+    leaderboard_text = "🏆 **【 今日即時聲調挑戰 ｜ 榮譽排行榜 】** 🏆\n"
+    leaderboard_text += "（每天 00:00 將會結算並重設歸零）\n"
     leaderboard_text += "───────────────────\n"
     for index, (user_id, info) in enumerate(sorted_stats[:10], start=1):
-        leaderboard_text += f"第 {index} 名 ｜ {info['name']} ── 💥 共成功觸發 **{info['correct']}** 次！\n"
+        leaderboard_text += f"第 {index} 名 ｜ {info['name']} ── 💥 今日已觸發 **{info['correct']}** 次！\n"
     
     await interaction.response.send_message(leaderboard_text)
 
 # ==============================================================================
-# 6. 監聽頻道訊息
+# 5. 監聽頻道訊息
 # ==============================================================================
 @bot.event
 async def on_message(message):
@@ -198,31 +215,27 @@ async def on_message(message):
 
         if user_tone == target_tone:
             user_id = str(message.author.id)
-            
-            # 💡 改用非同步方式直接從 Discord 頻道簡介撈資料
             stats = await load_stats_from_channel()
 
             if user_id not in stats:
                 stats[user_id] = {"name": message.author.name, "correct": 0}
 
             stats[user_id]["correct"] += 1
-            
-            # 💡 儲存回去 Discord 頻道簡介中，永久保存
             await save_stats_to_channel(stats)
             
             times = stats[user_id]["correct"]
-            await message.channel.send(f"🎉 {message.author.mention} 成功觸發！你已經講了 {times} 次每日聲調笑話。")
+            await message.channel.send(f"🎉 {message.author.mention} 成功觸發！你今天已經講了 {times} 次每日聲調笑話。")
     except Exception as e:
         print(f"❌ 錯誤攔截: {e}")
 
 # ==============================================================================
-# 7. 機器人啟動程序
+# 6. 機器人啟動程序
 # ==============================================================================
 @bot.event
 async def on_ready():
     print(f"🤖 機器人 {bot.user.name} 已成功滿血上線！")
-    if not midnight_alarm.is_running():
-        midnight_alarm.start()
+    if not midnight_scheduler.is_running():
+        midnight_scheduler.start()
 
 async def main():
     async with bot:
