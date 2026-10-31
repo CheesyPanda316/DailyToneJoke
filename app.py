@@ -1,29 +1,27 @@
 import json
 import os
 import re
-import threading  # 💡 引入多執行緒
-import http.server
-import socketserver
 from datetime import datetime
 import discord
-from discord import app_commands  
-from discord.ext import tasks
+from discord.ext import commands, tasks
 from pypinyin import pinyin, Style
+from flask import Flask # 💡 引入最輕量、不卡死非同步核心的網頁套件
 
 # ==============================================================================
-# 0. 關鍵突破：在背景開一個假的網頁埠，徹底騙過 Render 的 Port 掃描
+# 0. 關鍵防禦：使用 Flask 在背景提供流暢不卡死的網頁埠，徹底騙過 Render
 # ==============================================================================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
 def run_dummy_server():
-    # Render 會自動提供一個變數叫 PORT，如果沒有就預設使用 10000
     port = int(os.environ.get("PORT", 10000))
-    handler = http.server.SimpleHTTPRequestHandler
-    # 允許地址快速重複使用，避免重啟時卡住
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("", port), handler) as httpd:
-        print(f"🌍 成功建立假的網頁伺服器，監聽埠：{port}")
-        httpd.serve_forever()
+    # 關閉除錯模式，以最省資源、不干擾 Discord 的方式在背景靈敏執行
+    app.run(host='0.0.0.0', port=port)
 
-# 讓網頁伺服器在背景偷偷跑，不卡住底下 Discord 機器人的執行
+import threading
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # ==============================================================================
@@ -32,8 +30,8 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 TOKEN = os.environ.get("DISCORD_TOKEN")  
 
 MY_SCHEDULED_TONES = {
-    "2026-10-30": "242",  
-    "2026-10-31": "242",  
+    "2026-10-30": "242",  # 徹底防禦海外伺服器時差
+    "2026-10-31": "242",  # 今日密碼：242
     "2026-11-01": "124",    
     "2026-11-02": "311",   
 }
@@ -42,8 +40,9 @@ STATS_FILE = "user_leaderboard.json"
 
 intents = discord.Intents.default()
 intents.message_content = True  
-client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(client)
+
+# 💡 換回專門處理訊息監聽的 commands.Bot 核心
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 TARGET_CHANNEL_ID = None  
 
@@ -80,7 +79,7 @@ async def midnight_alarm():
 
     now = datetime.now()
     if now.hour == 0:
-        channel = client.get_channel(TARGET_CHANNEL_ID)
+        channel = bot.get_channel(TARGET_CHANNEL_ID)
         if not channel:
             return
         today_str = now.strftime("%Y-%m-%d")
@@ -94,79 +93,77 @@ async def midnight_alarm():
             await channel.send(embed=embed)
 
 # ==============================================================================
-# 4. 斜線指令專區：/listen 與 /unlisten
+# 4. 斜線指令專區：/listen 與 /unlisten（完美相容架構）
 # ==============================================================================
-@tree.command(name="listen", description="開始在此文字頻道偵測每日聲調笑話")
+@bot.tree.command(name="listen", description="開始在此文字頻道偵測每日聲調笑話")
 async def start_listening(interaction: discord.Interaction):
     global TARGET_CHANNEL_ID
-    current_channel_id = interaction.channel_id
-    
-    if TARGET_CHANNEL_ID == current_channel_id:
-        await interaction.response.send_message("📢 機器人已經在這個頻道導入並偵測中囉！")
-    else:
-        TARGET_CHANNEL_ID = current_channel_id
-        await interaction.response.send_message("✅ 成功導入頻道！機器人已鎖定此頻道進行聲調偵測與每日 00:00 警報！")
+    TARGET_CHANNEL_ID = interaction.channel_id
+    await interaction.response.send_message("✅ 成功導入頻道！機器人已鎖定此頻道進行聲調偵測與每日 00:00 警報！")
 
-@tree.command(name="unlisten", description="停止此文字頻道的聲調偵測功能")
+@bot.tree.command(name="unlisten", description="停止此文字頻道的聲調偵測功能")
 async def stop_listening(interaction: discord.Interaction):
     global TARGET_CHANNEL_ID
-    if TARGET_CHANNEL_ID is None:
-        await interaction.response.send_message("📴 機器人目前本來就沒有在任何頻道進行偵測。")
-    else:
-        TARGET_CHANNEL_ID = None
-        await interaction.response.send_message("❌ 機器人已取消頻道導入！現在在任何頻道打字挑戰都不會觸發統計。")
+    TARGET_CHANNEL_ID = None
+    await interaction.response.send_message("❌ 機器人已取消頻道導入！")
 
 # ==============================================================================
-# 5. 監聽頻道訊息：造句捕獲
+# 5. 監聽頻道訊息：雙軌並行，完全解放耳朵
 # ==============================================================================
-@client.event
+@bot.event
 async def on_message(message):
-    if message.author.bot:
-        return
+    try:
+        if message.author.bot:
+            return
 
-    if TARGET_CHANNEL_ID is None or message.channel.id != TARGET_CHANNEL_ID:
-        return
+        # 避免與常規指令衝突
+        await bot.process_commands(message)
 
-    user_sentence = message.content.strip()
-    if user_sentence.startswith("/") or user_sentence.startswith("!"):
-        return
+        if TARGET_CHANNEL_ID is None or message.channel.id != TARGET_CHANNEL_ID:
+            return
 
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    if today_str not in MY_SCHEDULED_TONES:
-        return
+        user_sentence = message.content.strip()
+        if user_sentence.startswith("/") or user_sentence.startswith("!"):
+            return
 
-    target_tone = MY_SCHEDULED_TONES[today_str]
-    user_tone = convert_chinese_to_tone_code(user_sentence)
-    
-    if len(user_tone) != len(target_tone) or len(user_tone) == 0:
-        return
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        if today_str not in MY_SCHEDULED_TONES:
+            return
 
-    if user_tone == target_tone:
-        user_id = str(message.author.id)
-        stats = load_stats()
+        target_tone = MY_SCHEDULED_TONES[today_str]
+        user_tone = convert_chinese_to_tone_code(user_sentence)
 
-        if user_id not in stats:
-            stats[user_id] = {"name": message.author.name, "correct": 0}
+        if len(user_tone) != len(target_tone) or len(user_tone) == 0:
+            return
 
-        stats[user_id]["correct"] += 1
-        save_stats(stats)
-        
-        times = stats[user_id]["correct"]
-        await message.channel.send(f"⚠️ {message.author.mention} 你已經講了 {times} 次每日聲調笑話。")
+        if user_tone == target_tone:
+            user_id = str(message.author.id)
+            stats = load_stats()
+
+            if user_id not in stats:
+                stats[user_id] = {"name": message.author.name, "correct": 0}
+
+            stats[user_id]["correct"] += 1
+            save_stats(stats)
+            
+            times = stats[user_id]["correct"]
+            await message.channel.send(f"⚠️ {message.author.mention} 你已經講了 {times} 次每日聲調笑話。")
+    except Exception as e:
+        print(f"❌ 錯誤攔截: {e}")
 
 # ==============================================================================
 # 6. 機器人啟動程序
 # ==============================================================================
-@client.event
+@bot.event
 async def on_ready():
-    print(f"🤖 機器人 {client.user.name} 已成功上線！")
+    print(f"🤖 機器人 {bot.user.name} 已成功滿血上線！")
     try:
-        synced = await tree.sync()
+        synced = await bot.tree.sync()
         print(f"✨ 成功同步了 {len(synced)} 個斜線指令！")
     except Exception as e:
-        print(f"❌ 同步斜線指令時發生錯誤: {e}")
+        print(f"❌ 同步斜線指令錯誤: {e}")
         
     if not midnight_alarm.is_running():
         midnight_alarm.start()
 
-client.run(TOKEN)
+bot.run(TOKEN)
