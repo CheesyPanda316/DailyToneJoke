@@ -3,29 +3,32 @@ import os
 import re
 from datetime import datetime
 import discord
-from discord.ext import commands, tasks
+from discord import app_commands  # 💡 引入斜線指令核心
+from discord.ext import tasks
 from pypinyin import pinyin, Style
 
 # ==============================================================================
 # 1. 設定與大老闆排程專區
 # ==============================================================================
-# 請記得在此處填入你真正的 Discord Token 
-TOKEN = os.environ.get("DISCORD_TOKEN")  
+TOKEN = os.environ.get("DISCORD_TOKEN")  # 依然讀取 Render 的安全變數
 
 MY_SCHEDULED_TONES = {
-    "2026-10-31": "242",  
-    "2026-11-01": "124",    
-    "2026-11-02": "311",   
+    "2026-10-31": "31531",  
+    "2026-11-01": "142",    
+    "2026-11-02": "3144",   
 }
 
 STATS_FILE = "user_leaderboard.json"
 
+# 初始化 Discord 機器人客戶端
 intents = discord.Intents.default()
 intents.message_content = True  
-bot = commands.Bot(command_prefix="!", intents=intents)
+client = discord.Client(intents=intents)
 
-# ─── 【核心升級】全域狀態：改為儲存「目前在哪個頻道工作」 ───
-# 預設為 None（代表一上線時，還沒有導入任何頻道，保持完全安靜）
+# 建立斜線指令的樹狀管理中心
+tree = app_commands.CommandTree(client)
+
+# 全域狀態：儲存「目前在哪個頻道工作」
 TARGET_CHANNEL_ID = None  
 
 # ==============================================================================
@@ -51,18 +54,17 @@ def save_stats(data):
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 # ==============================================================================
-# 3. 每日 00:00 聲調笑話警報器 (自動發送到當前導入的頻道)
+# 3. 每日 00:00 聲調笑話警報器
 # ==============================================================================
 @tasks.loop(hours=1)
 async def midnight_alarm():
     global TARGET_CHANNEL_ID
-    # 如果使用者還沒有輸入 !listen 導入任何頻道，定時器就先不發送警報
     if TARGET_CHANNEL_ID is None:
         return
 
     now = datetime.now()
     if now.hour == 0:
-        channel = bot.get_channel(TARGET_CHANNEL_ID)
+        channel = client.get_channel(TARGET_CHANNEL_ID)
         if not channel:
             return
         today_str = now.strftime("%Y-%m-%d")
@@ -76,47 +78,44 @@ async def midnight_alarm():
             await channel.send(embed=embed)
 
 # ==============================================================================
-# 4. 指令專區：讓使用者隨時「導入」或「取消」頻道
+# 4. 斜線指令專區：/listen 與 /unlisten
 # ==============================================================================
-@bot.command(name="listen")
-async def start_listening(ctx):
+@tree.command(name="listen", description="開始在此文字頻道偵測每日聲調笑話")
+async def start_listening(interaction: discord.Interaction):
     global TARGET_CHANNEL_ID
-    # 💡 自動抓取使用者「目前在哪個頻道輸入指令」的 ID
-    current_channel_id = ctx.channel.id
+    current_channel_id = interaction.channel_id
     
     if TARGET_CHANNEL_ID == current_channel_id:
-        await ctx.send("📢 機器人已經在這個頻道導入並偵測中囉！")
+        await interaction.response.send_message("📢 機器人已經在這個頻道導入並偵測中囉！")
     else:
         TARGET_CHANNEL_ID = current_channel_id
-        await ctx.send(f"✅ 成功導入頻道！機器人已鎖定此頻道進行聲調偵測與每日 00:00 警報！")
+        await interaction.response.send_message("✅ 成功導入頻道！機器人已鎖定此頻道進行聲調偵測與每日 00:00 警報！")
 
-@bot.command(name="unlisten")
-async def stop_listening(ctx):
+@tree.command(name="unlisten", description="停止此文字頻道的聲調偵測功能")
+async def stop_listening(interaction: discord.Interaction):
     global TARGET_CHANNEL_ID
     if TARGET_CHANNEL_ID is None:
-        await ctx.send("📴 機器人目前本來就沒有在任何頻道進行偵測。")
+        await interaction.response.send_message("📴 機器人目前本來就沒有在任何頻道進行偵測。")
     else:
         TARGET_CHANNEL_ID = None
-        await ctx.send("❌ 機器人已取消頻道導入！現在在任何頻道打字挑戰都不會觸發統計。")
+        await interaction.response.send_message("❌ 機器人已取消頻道導入！現在在任何頻道打字挑戰都不會觸發統計。")
 
 # ==============================================================================
-# 5. 監聽頻道訊息：只在被導入的特定頻道運作
+# 5. 監聽頻道訊息：維持正常的打字造句捕獲（不需要打斜線）
 # ==============================================================================
-@bot.event
+@client.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # 確保 !listen 和 !unlisten 指令能被正常解析
-    await bot.process_commands(message)
-
-    # ─── 【核心修改】如果尚未導入頻道，或者「打字的頻道」不是被導入的頻道，直接不理它 ───
+    # 如果尚未導入頻道，或者「打字的頻道」不是被導入的頻道，直接略過
     if TARGET_CHANNEL_ID is None or message.channel.id != TARGET_CHANNEL_ID:
         return
-    # ───────────────────────────────────────────────────────────────
 
     user_sentence = message.content.strip()
-    if user_sentence.startswith("!"):
+    
+    # 略過任何以斜線或驚嘆號開頭的指令訊息，不當作造句
+    if user_sentence.startswith("/") or user_sentence.startswith("!"):
         return
 
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -141,16 +140,22 @@ async def on_message(message):
         
         times = stats[user_id]["correct"]
         await message.channel.send(f"⚠️ {message.author.mention} 你已經講了 {times} 次每日聲調笑話。")
-    else:
-        pass
 
 # ==============================================================================
-# 6. 機器人啟動程序
+# 6. 機器人啟動程序（核心修改：上線時自動同步斜線指令）
 # ==============================================================================
-@bot.event
+@client.event
 async def on_ready():
-    print(f"🤖 機器人 {bot.user.name} 已成功上線！")
+    print(f"🤖 機器人 {client.user.name} 已成功上線！")
+    
+    # 🔄 關鍵步驟：向 Discord 全球總部同步註冊 `/listen` 與 `/unlisten`
+    try:
+        synced = await tree.sync()
+        print(f"✨ 成功同步了 {len(synced)} 個斜線指令！")
+    except Exception as e:
+        print(f"❌ 同步斜線指令時發生錯誤: {e}")
+        
     if not midnight_alarm.is_running():
         midnight_alarm.start()
 
-bot.run(TOKEN)
+client.run(TOKEN)
