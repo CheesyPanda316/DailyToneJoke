@@ -32,6 +32,7 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 TOKEN = os.environ.get("DISCORD_TOKEN")  
 
 MY_SCHEDULED_TONES = {
+    "2026-10-30": "242",  
     "2026-10-31": "242",  
     "2026-11-01": "124",    
     "2026-11-02": "311",   
