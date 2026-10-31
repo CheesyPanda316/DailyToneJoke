@@ -116,22 +116,35 @@ async def on_message(message):
         if message.author.bot:
             return
 
-        # 避免與常規指令衝突
         await bot.process_commands(message)
 
         if TARGET_CHANNEL_ID is None or message.channel.id != TARGET_CHANNEL_ID:
             return
 
         user_sentence = message.content.strip()
+        # 排除指令
         if user_sentence.startswith("/") or user_sentence.startswith("!"):
             return
 
+        # 1. 取得當前日期的目標聲調
         today_str = datetime.now().strftime("%Y-%m-%d")
+        target_tone = MY_SCHEDULED_TONES.get(today_str, "未設定")
+
+        # 2. 轉化使用者的中文字
+        user_tone = convert_chinese_to_tone_code(user_sentence)
+
+        # 💡 【直接在 Discord 顯示盲測結果】 只要你打字，機器人就告訴你它聽到了什麼
+        if len(user_tone) > 0:
+            await message.channel.send(
+                f"🤖 **偵測報告**：\n"
+                f"• 你輸入的文字：`{user_sentence}`\n"
+                f"• 系統解析聲調：`{user_tone}` (長度: {len(user_tone)})\n"
+                f"• 今日目標聲調：`{target_tone}` (長度: {len(target_tone)})"
+            )
+
+        # 3. 原本的正式比對邏輯
         if today_str not in MY_SCHEDULED_TONES:
             return
-
-        target_tone = MY_SCHEDULED_TONES[today_str]
-        user_tone = convert_chinese_to_tone_code(user_sentence)
 
         if len(user_tone) != len(target_tone) or len(user_tone) == 0:
             return
@@ -147,7 +160,8 @@ async def on_message(message):
             save_stats(stats)
             
             times = stats[user_id]["correct"]
-            await message.channel.send(f"⚠️ {message.author.mention} 你已經講了 {times} 次每日聲調笑話。")
+            await message.channel.send(f"🎉 成功觸發！{message.author.mention} 你已經講了 {times} 次每日聲調笑話。")
+            
     except Exception as e:
         print(f"❌ 錯誤攔截: {e}")
 
