@@ -40,6 +40,7 @@ STATS_FILE = "user_leaderboard.json"
 intents = discord.Intents.default()
 intents.message_content = True  
 
+# 💡 前綴保留但不用它，主要改用 bot.tree 來同步斜線指令
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 TARGET_CHANNEL_ID = None  
@@ -48,16 +49,13 @@ TARGET_CHANNEL_ID = None
 # 2. 核心技術與資料庫讀寫
 # ==============================================================================
 def convert_chinese_to_tone_code(text):
-    # 僅保留中文字
     clean_text = "".join(re.findall(r"[\u4e00-\u9fa5]", text))
-    
-    # 💡 啟用 heteronym=True (多音字模式)，增加繁體字聲調配對的成功率
+    # 啟用 heteronym=True (多音字模式)，增加繁體字聲調配對的成功率
     pinyin_list = pinyin(clean_text, style=Style.TONE3, neutral_tone_with_five=True, heteronym=True)
     
     tone_code = ""
     for item in pinyin_list:
-        # item[0] 是最主要的讀音
-        main_pronunciation = item[0]
+        main_pronunciation = item[0] if isinstance(item, list) else item
         match = re.search(r"\d$", main_pronunciation)
         tone_code += match.group() if match else "5"
         
@@ -98,7 +96,7 @@ async def midnight_alarm():
             await channel.send(embed=embed)
 
 # ==============================================================================
-# 4. 斜線指令與常規指令專區
+# 4. 斜線指令專區（一律改用 /）
 # ==============================================================================
 @bot.tree.command(name="listen", description="開始在此文字頻道偵測每日聲調笑話")
 async def start_listening(interaction: discord.Interaction):
@@ -112,11 +110,12 @@ async def stop_listening(interaction: discord.Interaction):
     TARGET_CHANNEL_ID = None
     await interaction.response.send_message("❌ 機器人已取消頻道導入！")
 
-# 💡 新增常規檢查指令：輸入 !check 植物人，可以直接在 Discord 內測出系統判定為什麼聲調
-@bot.command(name="check")
-async def check_tone(ctx, *, text: str):
+# 💡 成功改為斜線指令 `/check` 
+@bot.tree.command(name="check", description="檢查中文字在機器人眼中的聲調密碼")
+@discord.app_commands.describe(text="想要查詢聲調的中文字或句子")
+async def check_tone(interaction: discord.Interaction, text: str):
     tone = convert_chinese_to_tone_code(text)
-    await ctx.send(f"🔍 「{text}」在機器人眼中的聲調密碼是：**【 {tone} 】**")
+    await interaction.response.send_message(f"🔍 「{text}」在機器人眼中的聲調密碼是：**【 {tone} 】**")
 
 # ==============================================================================
 # 5. 監聽頻道訊息：雙軌並行，完全解放耳朵
@@ -127,14 +126,13 @@ async def on_message(message):
         if message.author.bot:
             return
 
-        # 確保常規指令（例如 !check）可以被執行
         await bot.process_commands(message)
 
         if TARGET_CHANNEL_ID is None or message.channel.id != TARGET_CHANNEL_ID:
             return
 
         user_sentence = message.content.strip()
-        # 排除指令前綴
+        # 💡 只要是 / 或 ! 開頭的指令，一律跳過不進行聲調挑戰判定
         if user_sentence.startswith("/") or user_sentence.startswith("!"):
             return
 
@@ -145,8 +143,7 @@ async def on_message(message):
         target_tone = MY_SCHEDULED_TONES[today_str]
         user_tone = convert_chinese_to_tone_code(user_sentence)
 
-        # 💡 偵錯日誌：每次使用者發話，後台都會印出結果，方便你進 Render Log 查看問題
-        print(f"[Debug] 收到訊息: '{user_sentence}' | 解析聲調: {user_tone} | 目標聲調: {target_tone}")
+        print(f"[Debug] 收到挑戰: '{user_sentence}' | 解析聲調: {user_tone} | 目標聲調: {target_tone}")
 
         if len(user_tone) != len(target_tone) or len(user_tone) == 0:
             return
@@ -173,6 +170,7 @@ async def on_message(message):
 async def on_ready():
     print(f"🤖 機器人 {bot.user.name} 已成功滿血上線！")
     try:
+        # 同步所有斜線指令（包含新的 /check）
         synced = await bot.tree.sync()
         print(f"✨ 成功同步了 {len(synced)} 個斜線指令！")
     except Exception as e:
