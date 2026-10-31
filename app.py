@@ -1,34 +1,49 @@
 import json
 import os
 import re
+import threading  # 💡 引入多執行緒
+import http.server
+import socketserver
 from datetime import datetime
 import discord
-from discord import app_commands  # 💡 引入斜線指令核心
+from discord import app_commands  
 from discord.ext import tasks
 from pypinyin import pinyin, Style
 
 # ==============================================================================
+# 0. 關鍵突破：在背景開一個假的網頁埠，徹底騙過 Render 的 Port 掃描
+# ==============================================================================
+def run_dummy_server():
+    # Render 會自動提供一個變數叫 PORT，如果沒有就預設使用 10000
+    port = int(os.environ.get("PORT", 10000))
+    handler = http.server.SimpleHTTPRequestHandler
+    # 允許地址快速重複使用，避免重啟時卡住
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.TCPServer(("", port), handler) as httpd:
+        print(f"🌍 成功建立假的網頁伺服器，監聽埠：{port}")
+        httpd.serve_forever()
+
+# 讓網頁伺服器在背景偷偷跑，不卡住底下 Discord 機器人的執行
+threading.Thread(target=run_dummy_server, daemon=True).start()
+
+# ==============================================================================
 # 1. 設定與大老闆排程專區
 # ==============================================================================
-TOKEN = os.environ.get("DISCORD_TOKEN")  # 依然讀取 Render 的安全變數
+TOKEN = os.environ.get("DISCORD_TOKEN")  
 
 MY_SCHEDULED_TONES = {
-    "2026-10-31": "31531",  
-    "2026-11-01": "142",    
-    "2026-11-02": "3144",   
+    "2026-10-31": "242",  
+    "2026-11-01": "124",    
+    "2026-11-02": "311",   
 }
 
 STATS_FILE = "user_leaderboard.json"
 
-# 初始化 Discord 機器人客戶端
 intents = discord.Intents.default()
 intents.message_content = True  
 client = discord.Client(intents=intents)
-
-# 建立斜線指令的樹狀管理中心
 tree = app_commands.CommandTree(client)
 
-# 全域狀態：儲存「目前在哪個頻道工作」
 TARGET_CHANNEL_ID = None  
 
 # ==============================================================================
@@ -101,20 +116,17 @@ async def stop_listening(interaction: discord.Interaction):
         await interaction.response.send_message("❌ 機器人已取消頻道導入！現在在任何頻道打字挑戰都不會觸發統計。")
 
 # ==============================================================================
-# 5. 監聽頻道訊息：維持正常的打字造句捕獲（不需要打斜線）
+# 5. 監聽頻道訊息：造句捕獲
 # ==============================================================================
 @client.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # 如果尚未導入頻道，或者「打字的頻道」不是被導入的頻道，直接略過
     if TARGET_CHANNEL_ID is None or message.channel.id != TARGET_CHANNEL_ID:
         return
 
     user_sentence = message.content.strip()
-    
-    # 略過任何以斜線或驚嘆號開頭的指令訊息，不當作造句
     if user_sentence.startswith("/") or user_sentence.startswith("!"):
         return
 
@@ -142,13 +154,11 @@ async def on_message(message):
         await message.channel.send(f"⚠️ {message.author.mention} 你已經講了 {times} 次每日聲調笑話。")
 
 # ==============================================================================
-# 6. 機器人啟動程序（核心修改：上線時自動同步斜線指令）
+# 6. 機器人啟動程序
 # ==============================================================================
 @client.event
 async def on_ready():
     print(f"🤖 機器人 {client.user.name} 已成功上線！")
-    
-    # 🔄 關鍵步驟：向 Discord 全球總部同步註冊 `/listen` 與 `/unlisten`
     try:
         synced = await tree.sync()
         print(f"✨ 成功同步了 {len(synced)} 個斜線指令！")
