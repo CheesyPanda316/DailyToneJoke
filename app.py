@@ -2,15 +2,14 @@ import json
 import os
 import re
 from datetime import datetime
-import threading
 import discord
 from discord.ext import commands, tasks
 from pypinyin import pinyin, Style
 from flask import Flask
-import pytz
+import threading
 
 # ==============================================================================
-# 0. 背景流暢網頁埠
+# 0. 關鍵防禦：使用 Flask 在背景提供流暢不卡死的網頁埠，徹底騙過 Render
 # ==============================================================================
 app = Flask(__name__)
 
@@ -25,12 +24,12 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # ==============================================================================
-# 1. 核心宣告（強制全權限）
+# 1. 設定與大老闆排程專區
 # ==============================================================================
 TOKEN = os.environ.get("DISCORD_TOKEN")  
 
 MY_SCHEDULED_TONES = {
-    "2026-10-30": "242",
+    "2026-10-30": "242",  # 徹底防禦海外伺服器時差
     "2026-10-31": "242",  # 今日密碼：242
     "2026-11-01": "124",    
     "2026-11-02": "311",   
@@ -38,22 +37,30 @@ MY_SCHEDULED_TONES = {
 
 STATS_FILE = "user_leaderboard.json"
 
-# 強制開啟全部特權
-intents = discord.Intents.all()
+intents = discord.Intents.default()
+intents.message_content = True  
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 TARGET_CHANNEL_ID = None  
 
 # ==============================================================================
-# 2. 輔助函式
+# 2. 核心技術與資料庫讀寫
 # ==============================================================================
 def convert_chinese_to_tone_code(text):
+    # 僅保留中文字
     clean_text = "".join(re.findall(r"[\u4e00-\u9fa5]", text))
-    pinyin_list = pinyin(clean_text, style=Style.TONE3, neutral_tone_with_five=True)
+    
+    # 💡 啟用 heteronym=True (多音字模式)，增加繁體字聲調配對的成功率
+    pinyin_list = pinyin(clean_text, style=Style.TONE3, neutral_tone_with_five=True, heteronym=True)
+    
     tone_code = ""
     for item in pinyin_list:
-        match = re.search(r"\d$", item)
+        # item[0] 是最主要的讀音
+        main_pronunciation = item[0]
+        match = re.search(r"\d$", main_pronunciation)
         tone_code += match.group() if match else "5"
+        
     return tone_code
 
 def load_stats():
@@ -75,9 +82,7 @@ async def midnight_alarm():
     if TARGET_CHANNEL_ID is None:
         return
 
-    tz = pytz.timezone('Asia/Taipei')
-    now = datetime.now(tz)
-    
+    now = datetime.now()
     if now.hour == 0:
         channel = bot.get_channel(TARGET_CHANNEL_ID)
         if not channel:
@@ -93,7 +98,7 @@ async def midnight_alarm():
             await channel.send(embed=embed)
 
 # ==============================================================================
-# 4. 斜線指令專區：/listen 與 /unlisten
+# 4. 斜線指令與常規指令專區
 # ==============================================================================
 @bot.tree.command(name="listen", description="開始在此文字頻道偵測每日聲調笑話")
 async def start_listening(interaction: discord.Interaction):
@@ -107,46 +112,46 @@ async def stop_listening(interaction: discord.Interaction):
     TARGET_CHANNEL_ID = None
     await interaction.response.send_message("❌ 機器人已取消頻道導入！")
 
+# 💡 新增常規檢查指令：輸入 !check 植物人，可以直接在 Discord 內測出系統判定為什麼聲調
+@bot.command(name="check")
+async def check_tone(ctx, *, text: str):
+    tone = convert_chinese_to_tone_code(text)
+    await ctx.send(f"🔍 「{text}」在機器人眼中的聲調密碼是：**【 {tone} 】**")
+
 # ==============================================================================
-# 5. 獨立常規訊息監聽：不綁定任何前置條件
+# 5. 監聽頻道訊息：雙軌並行，完全解放耳朵
 # ==============================================================================
-@bot.listen("on_message") # 💡 使用獨立事件監聽器，防止被常規事件核心卡死吞掉
-async def handle_user_msg(message):
+@bot.event
+async def on_message(message):
     try:
-        # 排除自己的機器人
         if message.author.bot:
             return
 
-        user_sentence = message.content.strip()
-        # 排除指令字串
-        if user_sentence.startswith("/") or user_sentence.startswith("!"):
-            return
+        # 確保常規指令（例如 !check）可以被執行
+        await bot.process_commands(message)
 
-        # 🚨 【最底層防禦測試】只要能拿到字，立刻回覆！
-        test_tone = convert_chinese_to_tone_code(user_sentence)
-        await message.channel.send(
-            f"📢 **【測試核心連通】**\n"
-            f"• 聽到內容：`{user_sentence}`\n"
-            f"• 解析聲調：`{test_tone}`"
-        )
-
-        # 檢查頻道鎖定
         if TARGET_CHANNEL_ID is None or message.channel.id != TARGET_CHANNEL_ID:
             return
 
-        # 台北時間日期比對
-        tz = pytz.timezone('Asia/Taipei')
-        today_str = datetime.now(tz).strftime("%Y-%m-%d")
-        
+        user_sentence = message.content.strip()
+        # 排除指令前綴
+        if user_sentence.startswith("/") or user_sentence.startswith("!"):
+            return
+
+        today_str = datetime.now().strftime("%Y-%m-%d")
         if today_str not in MY_SCHEDULED_TONES:
             return
 
         target_tone = MY_SCHEDULED_TONES[today_str]
+        user_tone = convert_chinese_to_tone_code(user_sentence)
 
-        if len(test_tone) != len(target_tone) or len(test_tone) == 0:
+        # 💡 偵錯日誌：每次使用者發話，後台都會印出結果，方便你進 Render Log 查看問題
+        print(f"[Debug] 收到訊息: '{user_sentence}' | 解析聲調: {user_tone} | 目標聲調: {target_tone}")
+
+        if len(user_tone) != len(target_tone) or len(user_tone) == 0:
             return
 
-        if test_tone == target_tone:
+        if user_tone == target_tone:
             user_id = str(message.author.id)
             stats = load_stats()
 
@@ -157,7 +162,7 @@ async def handle_user_msg(message):
             save_stats(stats)
             
             times = stats[user_id]["correct"]
-            await message.channel.send(f"🎉 **成功觸發！** {message.author.mention} 你已經講了 {times} 次每日聲調笑話。")
+            await message.channel.send(f"🎉 {message.author.mention} 成功觸發！你已經講了 {times} 次每日聲調笑話。")
     except Exception as e:
         print(f"❌ 錯誤攔截: {e}")
 
@@ -168,9 +173,8 @@ async def handle_user_msg(message):
 async def on_ready():
     print(f"🤖 機器人 {bot.user.name} 已成功滿血上線！")
     try:
-        # 💡 非同步同步斜線指令，不阻塞監聽核心
-        await bot.tree.sync()
-        print("✨ 斜線指令同步完成！")
+        synced = await bot.tree.sync()
+        print(f"✨ 成功同步了 {len(synced)} 個斜線指令！")
     except Exception as e:
         print(f"❌ 同步斜線指令錯誤: {e}")
         
