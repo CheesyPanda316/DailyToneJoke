@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import asyncio
 from datetime import datetime
 import discord
 from discord.ext import commands, tasks
@@ -19,8 +20,10 @@ def home():
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    # 💡 關閉 debug 模式，確保不會在 Render 上重複啟動導致死鎖
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
+# 使用常規執行緒啟動網頁伺服器
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # ==============================================================================
@@ -40,7 +43,6 @@ STATS_FILE = "user_leaderboard.json"
 intents = discord.Intents.default()
 intents.message_content = True  
 
-# 保留 ! 作為後台管理與手動同步的前綴
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 TARGET_CHANNEL_ID = None  
@@ -54,7 +56,7 @@ def convert_chinese_to_tone_code(text):
     
     tone_code = ""
     for item in pinyin_list:
-        main_pronunciation = item[0] if isinstance(item, list) else str(item)
+        main_pronunciation = item[0] if isinstance(item, list) and len(item) > 0 else str(item)
         match = re.search(r"\d$", main_pronunciation)
         tone_code += match.group() if match else "5"
         
@@ -97,19 +99,17 @@ async def midnight_alarm():
 # ==============================================================================
 # 4. 常規維護指令（使用 ! 觸發）
 # ==============================================================================
-# 💡 核心修正：將手動同步改為一般指令，避免開機卡死
 @bot.command(name="sync")
-@commands.is_owner() # 限制只有身為創作者的你可以執行
 async def sync_commands(ctx):
     await ctx.send("⏳ 正在向 Discord 伺服器同步斜線指令，請稍候...")
     try:
         synced = await bot.tree.sync()
-        await ctx.send(f"✨ 成功同步了 {len(synced)} 個斜線指令！請重整 Discord 畫面測試。")
+        await ctx.send(f"✨ 成功同步了 {len(synced)} 個斜線指令！請重新整理 Discord（F5）後測試。")
     except Exception as e:
         await ctx.send(f"❌ 同步失敗: {e}")
 
 # ==============================================================================
-# 5. 斜線指令專區（透過 !sync 同步後，即可一律改用 /）
+# 5. 斜線指令專區
 # ==============================================================================
 @bot.tree.command(name="listen", description="開始在此文字頻道偵測每日聲調笑話")
 async def start_listening(interaction: discord.Interaction):
@@ -138,7 +138,6 @@ async def on_message(message):
         if message.author.bot:
             return
 
-        # 必須保留這行，以便執行 !sync 指令
         await bot.process_commands(message)
 
         if TARGET_CHANNEL_ID is None or message.channel.id != TARGET_CHANNEL_ID:
@@ -180,9 +179,17 @@ async def on_message(message):
 # ==============================================================================
 @bot.event
 async def on_ready():
-    # 💡 移除了會導致卡死的同步邏輯，只做最單純的開機
     print(f"🤖 機器人 {bot.user.name} 已成功滿血上線！")
     if not midnight_alarm.is_running():
         midnight_alarm.start()
 
-bot.run(TOKEN)
+# 💡 終極修正：改用全新的 asyncio 異步事件迴圈來啟動，徹底分流，絕不卡死
+async def main():
+    async with bot:
+        await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
