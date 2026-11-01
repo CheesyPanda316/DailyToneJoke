@@ -24,7 +24,7 @@ def run_dummy_server():
 
 TOKEN = os.environ.get("DISCORD_TOKEN")  
 
-# 💡 這裡已經幫你排好了未來的日期，你之後不需要再手動用 GitHub 改程式碼了，一勞永逸！
+# 💡 未來日期排程（此處已配合當前 2026 年時間調整示範）
 MY_SCHEDULED_TONES = {
     "2026-11-01": "3",    
     "2026-11-02": "23",   
@@ -36,8 +36,6 @@ MY_SCHEDULED_TONES = {
     "2026-11-08": "44231123",   
     "2026-11-09": "144231123",   
     "2026-11-10": "3144231123",   
-    # 📝 你可以在下面繼續提前排好 11/11 ~ 11/20 的密碼：
-    # "2026-11-11": "242",
 }
 
 intents = discord.Intents.default()
@@ -57,7 +55,7 @@ def convert_chinese_to_tone_code(text):
     return tone_code
 
 async def load_stats_from_channel(channel):
-    if not channel or not channel.topic:
+    if not channel or not hasattr(channel, 'topic') or not channel.topic:
         return None
     match = re.search(r"DATA_START({.*})DATA_END", channel.topic)
     if match:
@@ -68,7 +66,7 @@ async def load_stats_from_channel(channel):
     return None
 
 async def save_stats_to_channel(channel, data):
-    if not channel:
+    if not channel or not hasattr(channel, 'edit'):
         return
     clean_topic = ""
     if channel.topic:
@@ -124,19 +122,35 @@ async def midnight_scheduler():
             except Exception as e:
                 print(f"❌ 跨日自動結算發生錯誤: {e}", flush=True)
 
-# 🛠️ 修正：使用 bot.get_channel 強行從 ID 獲取實體頻道，100% 杜絕 None 空值崩潰
+# 🛠️ 修正：引入 defer 延長回應時間，並確實檢查是否為 TextChannel
 @bot.tree.command(name="listen", description="在此文字頻道開啟每日聲調笑笑偵測功能")
 async def start_listening(interaction: discord.Interaction):
-    channel = bot.get_channel(interaction.channel_id) or await bot.fetch_channel(interaction.channel_id)
-    await save_stats_to_channel(channel, {})
-    await interaction.response.send_message("✅ 成功導入頻道！機器人已在此頻道建立獨立資料庫！")
+    await interaction.response.defer(ephemeral=False)
+    
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        channel = bot.get_channel(interaction.channel_id) or await bot.fetch_channel(interaction.channel_id)
+        
+    if isinstance(channel, discord.TextChannel):
+        await save_stats_to_channel(channel, {})
+        await interaction.followup.send("✅ 成功導入頻道！機器人已在此頻道建立獨立資料庫！")
+    else:
+        await interaction.followup.send("❌ 錯誤：此功能只能在伺服器的「文字頻道」中使用！")
 
-# 🛠️ 修正：使用 bot.get_channel 強行從 ID 獲取實體頻道，100% 杜絕 None 空值崩潰
+# 🛠️ 修正：引入 defer 延長回應時間，並確實檢查是否為 TextChannel
 @bot.tree.command(name="unlisten", description="停止此文字頻道的聲調偵測功能並清除數據")
 async def stop_listening(interaction: discord.Interaction):
-    channel = bot.get_channel(interaction.channel_id) or await bot.fetch_channel(interaction.channel_id)
-    await save_stats_to_channel(channel, None)
-    await interaction.response.send_message("🗑️ 機器人已取消此頻道的偵測並卸載簡介數據。")
+    await interaction.response.defer(ephemeral=False)
+    
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        channel = bot.get_channel(interaction.channel_id) or await bot.fetch_channel(interaction.channel_id)
+        
+    if isinstance(channel, discord.TextChannel):
+        await save_stats_to_channel(channel, None)
+        await interaction.followup.send("🗑️ 機器人已取消此頻道的偵測並卸載簡介數據。")
+    else:
+        await interaction.followup.send("❌ 錯誤：此功能只能在伺服器的「文字頻道」中使用！")
 
 @bot.tree.command(name="check", description="檢查中文字在機器人眼中的聲調密碼")
 @discord.app_commands.describe(text="想要查詢聲調的中文字或句子")
@@ -146,7 +160,14 @@ async def check_tone(interaction: discord.Interaction, text: str):
 
 @bot.tree.command(name="leaderboard", description="查看本頻道今日即時挑戰排行榜")
 async def leaderboard(interaction: discord.Interaction):
-    channel = bot.get_channel(interaction.channel_id) or await bot.fetch_channel(interaction.channel_id)
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        channel = bot.get_channel(interaction.channel_id) or await bot.fetch_channel(interaction.channel_id)
+        
+    if not isinstance(channel, discord.TextChannel):
+        await interaction.response.send_message("❌ 錯誤：此功能只能在伺服器的「文字頻道」中使用！")
+        return
+
     stats = await load_stats_from_channel(channel)
     if stats is None:
         await interaction.response.send_message("❌ 此頻道尚未啟用聲調偵測功能，請先輸入 `/listen` 啟用。")
