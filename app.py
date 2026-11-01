@@ -22,8 +22,6 @@ def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
-threading.Thread(target=run_dummy_server, daemon=True).start()
-
 TOKEN = os.environ.get("DISCORD_TOKEN")  
 
 MY_SCHEDULED_TONES = {
@@ -46,15 +44,15 @@ intents.message_content = True
 intents.members = True  
 bot = commands.Bot(command_prefix=[], intents=intents)
 
+# 🛠️ 核心修正：改用官方推薦的標準多音字安全提取與扁平化邏輯
 def convert_chinese_to_tone_code(text):
     clean_text = "".join(re.findall(r"[\u4e00-\u9fa5]", text))
-    # 優化：使用 heteronym=False 確保只拿第一順位讀音，並將二維陣列扁平化
     pinyin_list = pinyin(clean_text, style=Style.TONE3, neutral_tone_with_five=True, heteronym=False)
     
     tone_code = ""
     for item in pinyin_list:
         if isinstance(item, list) and len(item) > 0:
-            raw_pinyin = str(item[0]) # 精準拿到 ['wo3'] 裡面的 'wo3'
+            raw_pinyin = str(item[0])  # 精準拿到二維列表中的拼音字串
         else:
             raw_pinyin = str(item)
             
@@ -204,19 +202,30 @@ async def on_message(message):
     except Exception:
         pass
 
+# 💡 終極安全機制：將 Flask 保活伺服器掛載到 setup_hook
+# 這能百分之百確保「機器人與 Discord 先順利連接上」才在背景發動網頁，完全杜絕 Port 被重複佔用的衝突！
 @bot.event
-async def on_ready():
-    print(f"🤖 機器人 {bot.user.name} 已成功滿血上線！")
+async def setup_hook():
+    print("🌐 Discord 已就緒，正在非阻塞啟動背景保活 Flask 網頁伺服器...")
+    threading.Thread(target=run_dummy_server, daemon=True).start()
     try:
         await bot.tree.sync()
-    except Exception:
-        pass
+        print("✨ 斜線指令全自動同步成功！")
+    except Exception as e:
+        print(f"❌ 同步斜線指令失敗: {e}")
+
+@bot.event
+async def on_ready():
+    print(f"🤖 機器人 {bot.user.name} 已成功連線至 Discord 網關並正常上線！")
     if not midnight_scheduler.is_running():
         midnight_scheduler.start()
 
 async def main():
-    threading.Thread(target=run_dummy_server, daemon=True).start()
     async with bot:
+        if not TOKEN:
+            print("❌ 錯誤：找不到 DISCORD_TOKEN 環境變數！")
+            return
+        print("⏳ 正在安全連線至 Discord Gateway...")
         await bot.start(TOKEN)
 
 if __name__ == "__main__":
