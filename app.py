@@ -55,22 +55,30 @@ def convert_chinese_to_tone_code(text):
     return tone_code
 
 async def load_stats_from_channel(channel):
+    # 強化：如果完全沒有啟用過（無 topic），返回 None
     if not channel or not hasattr(channel, 'topic') or not channel.topic:
         return None
+    
+    # 檢查是否含有特定資料庫結構標記
+    if "DATA_START" not in channel.topic:
+        return None
+        
     match = re.search(r"DATA_START({.*})DATA_END", channel.topic)
     if match:
         try:
             return json.loads(match.group(1))
         except Exception:
             pass
-    return None
+    return {} # 若有標記但解析失敗，回傳空字典確保不崩潰
 
 async def save_stats_to_channel(channel, data):
     if not channel or not hasattr(channel, 'edit'):
         return
+    
     clean_topic = ""
     if channel.topic:
         clean_topic = re.sub(r"\n?DATA_START.*DATA_END", "", channel.topic).strip()
+        
     if data is None:
         new_topic = clean_topic
     else:
@@ -122,7 +130,6 @@ async def midnight_scheduler():
             except Exception as e:
                 print(f"❌ 跨日自動結算發生錯誤: {e}", flush=True)
 
-# 🛠️ 核心優化：先發送成功訊息，再背景修改簡介，完全防止卡死
 @bot.tree.command(name="listen", description="在此文字頻道開啟每日聲調笑笑偵測功能")
 async def start_listening(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=False)
@@ -137,7 +144,6 @@ async def start_listening(interaction: discord.Interaction):
     else:
         await interaction.followup.send("❌ 錯誤：此功能只能在伺服器的「文字頻道」中使用！")
 
-# 🛠️ 核心優化：先發送成功訊息，再背景修改簡介，完全防止卡死
 @bot.tree.command(name="unlisten", description="停止此文字頻道的聲調偵測功能並清除數據")
 async def stop_listening(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=False)
@@ -197,6 +203,7 @@ async def on_message(message):
             return
             
         stats = await load_stats_from_channel(message.channel)
+        # 💡 核心修正：如果 stats 為 None 代表頻道未啟用，直接忽略
         if stats is None:
             return  
             
