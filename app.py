@@ -2,14 +2,16 @@ import json
 import os
 import re
 import asyncio
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 import discord
 from discord.ext import commands, tasks
 from pypinyin import pinyin, Style
 from flask import Flask
 import threading
 
-# 1. 建立 Flask 實例
+# 設定台灣台北時區 (GMT+8)
+TAIPEI_TZ = timezone(timedelta(hours=8))
+
 app = Flask(__name__)
 
 @app.route('/')
@@ -18,10 +20,10 @@ def home():
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
-    # 確保關閉 debug 和 reloader，防止其在子線程中與主線程爭奪資源
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
-# 2. 設定 Discord 機器人
+threading.Thread(target=run_dummy_server, daemon=True).start()
+
 TOKEN = os.environ.get("DISCORD_TOKEN")  
 
 MY_SCHEDULED_TONES = {
@@ -42,16 +44,21 @@ MY_SCHEDULED_TONES = {
 intents = discord.Intents.default()
 intents.message_content = True  
 intents.members = True  
-
 bot = commands.Bot(command_prefix=[], intents=intents)
 
 def convert_chinese_to_tone_code(text):
     clean_text = "".join(re.findall(r"[\u4e00-\u9fa5]", text))
-    pinyin_list = pinyin(clean_text, style=Style.TONE3, neutral_tone_with_five=True)
+    # 優化：使用 heteronym=False 確保只拿第一順位讀音，並將二維陣列扁平化
+    pinyin_list = pinyin(clean_text, style=Style.TONE3, neutral_tone_with_five=True, heteronym=False)
+    
     tone_code = ""
     for item in pinyin_list:
-        main_pronunciation = item if isinstance(item, list) and len(item) > 0 else str(item)
-        match = re.search(r"\d$", main_pronunciation)
+        if isinstance(item, list) and len(item) > 0:
+            raw_pinyin = str(item[0]) # 精準拿到 ['wo3'] 裡面的 'wo3'
+        else:
+            raw_pinyin = str(item)
+            
+        match = re.search(r"\d$", raw_pinyin)
         tone_code += match.group() if match else "5"
     return tone_code
 
@@ -62,8 +69,8 @@ async def load_stats_from_channel(channel):
     if match:
         try:
             return json.loads(match.group(1))
-        except Exception as e:
-            print(f"❌ 解析簡介資料失敗: {e}")
+        except Exception:
+            pass
     return None
 
 async def save_stats_to_channel(channel, data):
@@ -83,9 +90,9 @@ async def save_stats_to_channel(channel, data):
     except Exception as e:
         print(f"❌ 寫入頻道 [{channel.name}] 簡介失敗: {e}")
 
-@tasks.loop(time=time(hour=0, minute=0))
+@tasks.loop(time=time(hour=0, minute=0, tzinfo=TAIPEI_TZ))
 async def midnight_scheduler():
-    now = datetime.now()
+    now = datetime.now(TAIPEI_TZ)
     yesterday_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     today_str = now.strftime("%Y-%m-%d")
     
@@ -121,25 +128,17 @@ async def midnight_scheduler():
                     )
                     await channel.send(embed=embed_start)
             except Exception as e:
-                print(f"❌ 跨日自動結算頻道 [{channel.name}] 發生錯誤: {e}")
+                print(f"❌ 跨日自動結算發生錯誤: {e}")
 
 @bot.tree.command(name="listen", description="在此文字頻道開啟每日聲調笑話偵測功能")
 async def start_listening(interaction: discord.Interaction):
     channel = interaction.channel
-    stats = await load_stats_from_channel(channel)
-    if stats is not None:
-        await interaction.response.send_message("⚠️ 此頻道已經在偵測列表中，無需重複載入！")
-        return
     await save_stats_to_channel(channel, {})
     await interaction.response.send_message("✅ 成功導入頻道！機器人已在此頻道建立獨立資料庫，並鎖定進行每日 00:00 結算警報！")
 
 @bot.tree.command(name="unlisten", description="停止此文字頻道的聲調偵測功能並清除數據")
 async def stop_listening(interaction: discord.Interaction):
     channel = interaction.channel
-    stats = await load_stats_from_channel(channel)
-    if stats is None:
-        await interaction.response.send_message("❌ 此頻道本來就沒有開啟偵測功能喔！")
-        return
     await save_stats_to_channel(channel, None)
     await interaction.response.send_message("🗑️ 機器人已取消此頻道的偵測，並將簡介資料庫完整卸載！")
 
@@ -173,8 +172,6 @@ async def on_message(message):
     try:
         if message.author.bot:
             return
-        
-        # 徹底移除舊版 interaction，改用新版 metadata 避免警告
         if message.interaction_metadata is not None:
             return
 
@@ -186,13 +183,12 @@ async def on_message(message):
         if stats is None:
             return  
             
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        today_str = datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d")
         if today_str not in MY_SCHEDULED_TONES:
             return
             
         target_tone = MY_SCHEDULED_TONES[today_str]
         user_tone = convert_chinese_to_tone_code(user_sentence)
-        print(f"[Debug] 頻道 [#{message.channel.name}] 收到挑戰: '{user_sentence}' | 解析聲調: {user_tone}")
         
         if len(user_tone) != len(target_tone) or len(user_tone) == 0:
             return
@@ -205,31 +201,22 @@ async def on_message(message):
             await save_stats_to_channel(message.channel, stats)
             times = stats[user_id]["correct"]
             await message.channel.send(f"🎉 {message.author.mention} 成功觸發！你今天在此頻道已經講了 {times} 次每日聲調笑話。")
-    except Exception as e:
-        print(f"❌ 訊息監聽攔截錯誤: {e}")
+    except Exception:
+        pass
 
 @bot.event
 async def on_ready():
     print(f"🤖 機器人 {bot.user.name} 已成功滿血上線！")
     try:
-        synced = await bot.tree.sync()
-        print(f"✨ 成功全自動同步了 {len(synced)} 個斜線指令！")
-    except Exception as e:
-        print(f"❌ 自動同步斜線指令失敗: {e}")
-
+        await bot.tree.sync()
+    except Exception:
+        pass
     if not midnight_scheduler.is_running():
         midnight_scheduler.start()
 
 async def main():
-    # 3. 完美的啟動順序：在非阻塞的主異步迴圈中才把 Flask 丟去背景線程
-    print("🌐 正在背景啟動保活網頁伺服器 (Flask)...")
     threading.Thread(target=run_dummy_server, daemon=True).start()
-    
     async with bot:
-        if not TOKEN:
-            print("❌ 錯誤：找不到 DISCORD_TOKEN 環境變數！")
-            return
-        print("⏳ 正在嘗試連線至 Discord Gateway...")
         await bot.start(TOKEN)
 
 if __name__ == "__main__":
