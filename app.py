@@ -24,7 +24,7 @@ def run_dummy_server():
 
 TOKEN = os.environ.get("DISCORD_TOKEN")  
 
-# 💡 未來日期排程（此處已配合當前 2026 年時間調整示範）
+# 💡 未來日期排程（配合 2026 年時間）
 MY_SCHEDULED_TONES = {
     "2026-11-01": "3",    
     "2026-11-02": "23",   
@@ -122,7 +122,7 @@ async def midnight_scheduler():
             except Exception as e:
                 print(f"❌ 跨日自動結算發生錯誤: {e}", flush=True)
 
-# 🛠️ 修正：引入 defer 延長回應時間，並確實檢查是否為 TextChannel
+# 🛠️ 核心優化：先發送成功訊息，再背景修改簡介，完全防止卡死
 @bot.tree.command(name="listen", description="在此文字頻道開啟每日聲調笑笑偵測功能")
 async def start_listening(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=False)
@@ -132,12 +132,12 @@ async def start_listening(interaction: discord.Interaction):
         channel = bot.get_channel(interaction.channel_id) or await bot.fetch_channel(interaction.channel_id)
         
     if isinstance(channel, discord.TextChannel):
+        await interaction.followup.send("✅ 成功導入頻道！機器人正在此頻道建立獨立資料庫（若簡介更新較慢是受 Discord 官方限速影響，請稍候）！")
         await save_stats_to_channel(channel, {})
-        await interaction.followup.send("✅ 成功導入頻道！機器人已在此頻道建立獨立資料庫！")
     else:
         await interaction.followup.send("❌ 錯誤：此功能只能在伺服器的「文字頻道」中使用！")
 
-# 🛠️ 修正：引入 defer 延長回應時間，並確實檢查是否為 TextChannel
+# 🛠️ 核心優化：先發送成功訊息，再背景修改簡介，完全防止卡死
 @bot.tree.command(name="unlisten", description="停止此文字頻道的聲調偵測功能並清除數據")
 async def stop_listening(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=False)
@@ -147,8 +147,8 @@ async def stop_listening(interaction: discord.Interaction):
         channel = bot.get_channel(interaction.channel_id) or await bot.fetch_channel(interaction.channel_id)
         
     if isinstance(channel, discord.TextChannel):
+        await interaction.followup.send("🗑️ 機器人已取消此頻道的偵測並正在卸載簡介數據！")
         await save_stats_to_channel(channel, None)
-        await interaction.followup.send("🗑️ 機器人已取消此頻道的偵測並卸載簡介數據。")
     else:
         await interaction.followup.send("❌ 錯誤：此功能只能在伺服器的「文字頻道」中使用！")
 
