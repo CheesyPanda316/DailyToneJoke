@@ -38,6 +38,9 @@ MY_SCHEDULED_TONES = {
     "2026-11-10": "3144231123",   
 }
 
+# 🧠 記憶體快取：100% 解決 Discord 簡介限速導致打字沒反應的問題
+ACTIVE_CHANNELS_CACHE = {}
+
 intents = discord.Intents.default()
 intents.message_content = True  
 intents.members = True  
@@ -55,23 +58,34 @@ def convert_chinese_to_tone_code(text):
     return tone_code
 
 async def load_stats_from_channel(channel):
-    # 強化：如果完全沒有啟用過（無 topic），返回 None
+    # 優先從記憶體快取讀取，速度最快且最準確
+    if channel.id in ACTIVE_CHANNELS_CACHE:
+        return ACTIVE_CHANNELS_CACHE[channel.id]
+        
     if not channel or not hasattr(channel, 'topic') or not channel.topic:
         return None
     
-    # 檢查是否含有特定資料庫結構標記
     if "DATA_START" not in channel.topic:
         return None
         
     match = re.search(r"DATA_START({.*})DATA_END", channel.topic)
     if match:
         try:
-            return json.loads(match.group(1))
+            data = json.loads(match.group(1))
+            ACTIVE_CHANNELS_CACHE[channel.id] = data # 同步到快取
+            return data
         except Exception:
             pass
-    return {} # 若有標記但解析失敗，回傳空字典確保不崩潰
+    return {}
 
 async def save_stats_to_channel(channel, data):
+    # 同步更新記憶體快取
+    if data is None:
+        if channel.id in ACTIVE_CHANNELS_CACHE:
+            del ACTIVE_CHANNELS_CACHE[channel.id]
+    else:
+        ACTIVE_CHANNELS_CACHE[channel.id] = data
+
     if not channel or not hasattr(channel, 'edit'):
         return
     
@@ -88,13 +102,16 @@ async def save_stats_to_channel(channel, data):
     try:
         await channel.edit(topic=new_topic)
     except Exception as e:
-        print(f"❌ 寫入頻道 [{channel.name}] 簡介失敗: {e}", flush=True)
+        print(f"❌ 寫入頻道 [{channel.name}] 簡介失敗 (受官方限速影響，已先保存在記憶體中): {e}", flush=True)
 
 @tasks.loop(time=time(hour=0, minute=0, tzinfo=TAIPEI_TZ))
 async def midnight_scheduler():
     now = datetime.now(TAIPEI_TZ)
     yesterday_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     today_str = now.strftime("%Y-%m-%d")
+    
+    # 跨日清空所有快取，重新從頻道載入或歸零
+    ACTIVE_CHANNELS_CACHE.clear()
     
     for guild in bot.guilds:
         for channel in guild.text_channels:
@@ -139,7 +156,10 @@ async def start_listening(interaction: discord.Interaction):
         channel = bot.get_channel(interaction.channel_id) or await bot.fetch_channel(interaction.channel_id)
         
     if isinstance(channel, discord.TextChannel):
-        await interaction.followup.send("✅ 成功導入頻道！機器人正在此頻道建立獨立資料庫（若簡介更新較慢是受 Discord 官方限速影響，請稍候）！")
+        # 🧠 立刻寫入快取，讓打字偵測秒生效
+        ACTIVE_CHANNELS_CACHE[channel.id] = {}
+        await interaction.followup.send("✅ 成功導入頻道！機器人已在此頻道建立獨立資料庫！")
+        # 簡介更新丟到後面慢慢排隊
         await save_stats_to_channel(channel, {})
     else:
         await interaction.followup.send("❌ 錯誤：此功能只能在伺服器的「文字頻道」中使用！")
@@ -153,6 +173,8 @@ async def stop_listening(interaction: discord.Interaction):
         channel = bot.get_channel(interaction.channel_id) or await bot.fetch_channel(interaction.channel_id)
         
     if isinstance(channel, discord.TextChannel):
+        if channel.id in ACTIVE_CHANNELS_CACHE:
+            del ACTIVE_CHANNELS_CACHE[channel.id]
         await interaction.followup.send("🗑️ 機器人已取消此頻道的偵測並正在卸載簡介數據！")
         await save_stats_to_channel(channel, None)
     else:
@@ -203,7 +225,6 @@ async def on_message(message):
             return
             
         stats = await load_stats_from_channel(message.channel)
-        # 💡 核心修正：如果 stats 為 None 代表頻道未啟用，直接忽略
         if stats is None:
             return  
             
