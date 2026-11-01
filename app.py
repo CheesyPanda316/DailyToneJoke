@@ -24,7 +24,7 @@ def run_dummy_server():
 
 TOKEN = os.environ.get("DISCORD_TOKEN")  
 
-# 💡 未來日期排程（配合 2026 年時間）
+# 💡 未來日期排程（您可以在此自由增加、修改日期，重啟也不會影響當天分數）
 MY_SCHEDULED_TONES = {
     "2026-11-01": "3",    
     "2026-11-02": "23",   
@@ -38,11 +38,16 @@ MY_SCHEDULED_TONES = {
     "2026-11-10": "3144231123",   
 }
 
-# 💾 本地 JSON 資料庫設定
-DB_FILE = "discord_stats.json"
+# 💾 自動適應 Render 永久硬碟路徑 (防部署刷新機制)
+if os.path.exists("/data") or os.environ.get("RENDER"):
+    DB_FILE = "/data/discord_stats.json"
+    # 確保 Render 上的 /data 資料夾存在
+    os.makedirs("/data", exist_ok=True)
+else:
+    DB_FILE = "discord_stats.json"
 
 def load_all_data():
-    """從本地檔案讀取所有頻道的數據"""
+    """從永久檔案讀取所有頻道的數據"""
     if not os.path.exists(DB_FILE):
         return {}
     try:
@@ -53,7 +58,7 @@ def load_all_data():
         return {}
 
 def save_all_data(data):
-    """將所有數據寫入本地檔案"""
+    """將所有數據寫入永久檔案"""
     try:
         with open(DB_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
@@ -86,7 +91,7 @@ async def midnight_scheduler():
     
     db_data = load_all_data()
     
-    for channel_id_str, stats in db_data.items():
+    for channel_id_str, stats in list(db_data.items()):
         channel = bot.get_channel(int(channel_id_str))
         if not channel:
             continue
@@ -194,7 +199,6 @@ async def on_message(message):
         channel_id_str = str(message.channel.id)
         db_data = load_all_data()
         
-        # 如果頻道沒有啟用偵測，直接跳出
         if channel_id_str not in db_data:
             return  
             
@@ -216,7 +220,6 @@ async def on_message(message):
                 stats[user_id] = {"name": message.author.name, "correct": 0}
             stats[user_id]["correct"] += 1
             
-            # 保存回檔案
             db_data[channel_id_str] = stats
             save_all_data(db_data)
             
