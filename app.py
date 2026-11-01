@@ -24,7 +24,7 @@ def run_dummy_server():
 
 TOKEN = os.environ.get("DISCORD_TOKEN")  
 
-# 💡 換成這份代碼後，你之後隨時可以在下面加 11/11 ~ 11/20，分數不會不見！
+# 💡 這裡已經幫你排好了未來的日期，你之後不需要再手動用 GitHub 改程式碼了，一勞永逸！
 MY_SCHEDULED_TONES = {
     "2026-11-01": "3",    
     "2026-11-02": "23",   
@@ -36,6 +36,8 @@ MY_SCHEDULED_TONES = {
     "2026-11-08": "44231123",   
     "2026-11-09": "144231123",   
     "2026-11-10": "3144231123",   
+    # 📝 你可以在下面繼續提前排好 11/11 ~ 11/20 的密碼：
+    # "2026-11-11": "242",
 }
 
 intents = discord.Intents.default()
@@ -43,16 +45,13 @@ intents.message_content = True
 intents.members = True  
 bot = commands.Bot(command_prefix=[], intents=intents)
 
-# 🛠️ 核心修正：使用官方最穩定的扁平化字串處理，100% 抓到聲調數字
 def convert_chinese_to_tone_code(text):
     clean_text = "".join(re.findall(r"[\u4e00-\u9fa5]", text))
     pinyin_list = pinyin(clean_text, style=Style.TONE3, neutral_tone_with_five=True, heteronym=False)
     
     tone_code = ""
     for item in pinyin_list:
-        # pinyin(heteronym=False) 回傳的 item 確定是包含一個字串的列表，如 ['wo3']
         raw_pinyin = str(item).strip()
-        # 尋找字串中出現的任何數字
         match = re.search(r"\d", raw_pinyin)
         tone_code += match.group() if match else "5"
     return tone_code
@@ -112,8 +111,6 @@ async def midnight_scheduler():
                     embed_end.description += "\n😭 昨天竟然沒有人挑戰成功，大家都太害羞了！"
                 
                 await channel.send(embed=embed_end)
-                
-                # 午夜到期，自動重設簡介資料庫
                 await save_stats_to_channel(channel, {})
                 
                 if today_str in MY_SCHEDULED_TONES:
@@ -127,15 +124,17 @@ async def midnight_scheduler():
             except Exception as e:
                 print(f"❌ 跨日自動結算發生錯誤: {e}", flush=True)
 
+# 🛠️ 修正：使用 bot.get_channel 強行從 ID 獲取實體頻道，100% 杜絕 None 空值崩潰
 @bot.tree.command(name="listen", description="在此文字頻道開啟每日聲調笑笑偵測功能")
 async def start_listening(interaction: discord.Interaction):
-    channel = interaction.channel
+    channel = bot.get_channel(interaction.channel_id) or await bot.fetch_channel(interaction.channel_id)
     await save_stats_to_channel(channel, {})
     await interaction.response.send_message("✅ 成功導入頻道！機器人已在此頻道建立獨立資料庫！")
 
+# 🛠️ 修正：使用 bot.get_channel 強行從 ID 獲取實體頻道，100% 杜絕 None 空值崩潰
 @bot.tree.command(name="unlisten", description="停止此文字頻道的聲調偵測功能並清除數據")
 async def stop_listening(interaction: discord.Interaction):
-    channel = interaction.channel
+    channel = bot.get_channel(interaction.channel_id) or await bot.fetch_channel(interaction.channel_id)
     await save_stats_to_channel(channel, None)
     await interaction.response.send_message("🗑️ 機器人已取消此頻道的偵測並卸載簡介數據。")
 
@@ -147,7 +146,7 @@ async def check_tone(interaction: discord.Interaction, text: str):
 
 @bot.tree.command(name="leaderboard", description="查看本頻道今日即時挑戰排行榜")
 async def leaderboard(interaction: discord.Interaction):
-    channel = interaction.channel
+    channel = bot.get_channel(interaction.channel_id) or await bot.fetch_channel(interaction.channel_id)
     stats = await load_stats_from_channel(channel)
     if stats is None:
         await interaction.response.send_message("❌ 此頻道尚未啟用聲調偵測功能，請先輸入 `/listen` 啟用。")
@@ -215,14 +214,12 @@ async def setup_hook():
 
 @bot.event
 async def on_ready():
-    # 💡 加上 flush=True，強制壓榨 Render 排空緩衝，讓這行字秒印在日誌畫面上！
     print(f"🤖 機器人 {bot.user.name} 已成功連線至 Discord 網關並正常上線！", flush=True)
     if not midnight_scheduler.is_running():
         midnight_scheduler.start()
 
 async def main():
     async with bot:
-        print("⏳ 正在安全連線至 Discord Gateway...", flush=True)
         await bot.start(TOKEN)
 
 if __name__ == "__main__":
