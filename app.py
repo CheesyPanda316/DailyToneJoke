@@ -9,6 +9,7 @@ from pypinyin import pinyin, Style
 from flask import Flask
 import threading
 
+# 1. 建立 Flask 實例
 app = Flask(__name__)
 
 @app.route('/')
@@ -17,10 +18,10 @@ def home():
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
+    # 確保關閉 debug 和 reloader，防止其在子線程中與主線程爭奪資源
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
-threading.Thread(target=run_dummy_server, daemon=True).start()
-
+# 2. 設定 Discord 機器人
 TOKEN = os.environ.get("DISCORD_TOKEN")  
 
 MY_SCHEDULED_TONES = {
@@ -38,12 +39,10 @@ MY_SCHEDULED_TONES = {
     "2026-11-10": "3144231123",   
 }
 
-# 這裡依然保留 message_content 是因為你需要監聽一般人的聊天內容來判定聲調
 intents = discord.Intents.default()
 intents.message_content = True  
 intents.members = True  
 
-# 改用普通的 Bot 實例，我們不再註冊傳統的 @bot.command
 bot = commands.Bot(command_prefix=[], intents=intents)
 
 def convert_chinese_to_tone_code(text):
@@ -124,7 +123,6 @@ async def midnight_scheduler():
             except Exception as e:
                 print(f"❌ 跨日自動結算頻道 [{channel.name}] 發生錯誤: {e}")
 
-# 斜線指令 1：開啟監聽
 @bot.tree.command(name="listen", description="在此文字頻道開啟每日聲調笑話偵測功能")
 async def start_listening(interaction: discord.Interaction):
     channel = interaction.channel
@@ -135,7 +133,6 @@ async def start_listening(interaction: discord.Interaction):
     await save_stats_to_channel(channel, {})
     await interaction.response.send_message("✅ 成功導入頻道！機器人已在此頻道建立獨立資料庫，並鎖定進行每日 00:00 結算警報！")
 
-# 斜線指令 2：關閉監聽
 @bot.tree.command(name="unlisten", description="停止此文字頻道的聲調偵測功能並清除數據")
 async def stop_listening(interaction: discord.Interaction):
     channel = interaction.channel
@@ -146,14 +143,12 @@ async def stop_listening(interaction: discord.Interaction):
     await save_stats_to_channel(channel, None)
     await interaction.response.send_message("🗑️ 機器人已取消此頻道的偵測，並將簡介資料庫完整卸載！")
 
-# 斜線指令 3：查詢聲調密碼
 @bot.tree.command(name="check", description="檢查中文字在機器人眼中的聲調密碼")
 @discord.app_commands.describe(text="想要查詢聲調的中文字或句子")
 async def check_tone(interaction: discord.Interaction, text: str):
     tone = convert_chinese_to_tone_code(text)
     await interaction.response.send_message(f"🔍 「{text}」在機器人眼中的聲調密碼是：**【 {tone} 】**")
 
-# 斜線指令 4：排行榜
 @bot.tree.command(name="leaderboard", description="查看本頻道今日即時挑戰排行榜")
 async def leaderboard(interaction: discord.Interaction):
     channel = interaction.channel
@@ -179,13 +174,11 @@ async def on_message(message):
         if message.author.bot:
             return
         
-        # 排除所有斜線指令或應用程式互動生成的訊息
-        if message.interaction is not None:
+        # 徹底移除舊版 interaction，改用新版 metadata 避免警告
+        if message.interaction_metadata is not None:
             return
 
         user_sentence = message.content.strip()
-        
-        # 排除任何以斜線開頭的文字輸入，避免將指令誤判為聊天挑戰
         if user_sentence.startswith("/"):
             return
             
@@ -217,9 +210,8 @@ async def on_message(message):
 
 @bot.event
 async def on_ready():
-    print(f"🤖 機器人 {bot.user.name} 已上線，正在自動同步斜線指令...")
+    print(f"🤖 機器人 {bot.user.name} 已成功滿血上線！")
     try:
-        # 自動向 Discord 伺服器同步所有的斜線指令
         synced = await bot.tree.sync()
         print(f"✨ 成功全自動同步了 {len(synced)} 個斜線指令！")
     except Exception as e:
@@ -229,7 +221,15 @@ async def on_ready():
         midnight_scheduler.start()
 
 async def main():
+    # 3. 完美的啟動順序：在非阻塞的主異步迴圈中才把 Flask 丟去背景線程
+    print("🌐 正在背景啟動保活網頁伺服器 (Flask)...")
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+    
     async with bot:
+        if not TOKEN:
+            print("❌ 錯誤：找不到 DISCORD_TOKEN 環境變數！")
+            return
+        print("⏳ 正在嘗試連線至 Discord Gateway...")
         await bot.start(TOKEN)
 
 if __name__ == "__main__":
