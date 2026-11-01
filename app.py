@@ -48,12 +48,14 @@ MY_SCHEDULED_TONES = {
     "2026-11-20": "41213424323144231123",   
 }
 
-# 💾 自動適應 Render 永久硬碟路徑 (防部署刷新機制)
-if os.path.exists("/data") or os.environ.get("RENDER"):
-    DB_FILE = "/data/discord_stats.json"
-    # 確保 Render 上的 /data 資料夾存在
-    os.makedirs("/data", exist_ok=True)
+# 💾 安全自動適應路徑 (改為專案目錄底下的 data 資料夾)
+if os.environ.get("RENDER"):
+    # 在 Render 環境中，將資料夾建在當前專案目錄底下
+    DATA_DIR = os.path.join(os.getcwd(), "data")
+    DB_FILE = os.path.join(DATA_DIR, "discord_stats.json")
+    os.makedirs(DATA_DIR, exist_ok=True)
 else:
+    # 本地測試時直接放在同級目錄
     DB_FILE = "discord_stats.json"
 
 def load_all_data():
