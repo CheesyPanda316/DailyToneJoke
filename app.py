@@ -43,19 +43,17 @@ intents.message_content = True
 intents.members = True  
 bot = commands.Bot(command_prefix=[], intents=intents)
 
+# 🛠️ 核心修正：使用官方最穩定的扁平化字串處理，100% 抓到聲調數字
 def convert_chinese_to_tone_code(text):
     clean_text = "".join(re.findall(r"[\u4e00-\u9fa5]", text))
     pinyin_list = pinyin(clean_text, style=Style.TONE3, neutral_tone_with_five=True, heteronym=False)
     
     tone_code = ""
     for item in pinyin_list:
-        # 修正：精準提取巢狀列表內的第一個拼音元素，避免符號干擾正則比對
-        if isinstance(item, list) and len(item) > 0:
-            raw_pinyin = str(item[0])
-        else:
-            raw_pinyin = str(item)
-            
-        match = re.search(r"\d$", raw_pinyin)
+        # pinyin(heteronym=False) 回傳的 item 確定是包含一個字串的列表，如 ['wo3']
+        raw_pinyin = str(item).strip()
+        # 尋找字串中出現的任何數字
+        match = re.search(r"\d", raw_pinyin)
         tone_code += match.group() if match else "5"
     return tone_code
 
@@ -85,7 +83,7 @@ async def save_stats_to_channel(channel, data):
     try:
         await channel.edit(topic=new_topic)
     except Exception as e:
-        print(f"❌ 寫入頻道 [{channel.name}] 簡介失敗: {e}")
+        print(f"❌ 寫入頻道 [{channel.name}] 簡介失敗: {e}", flush=True)
 
 @tasks.loop(time=time(hour=0, minute=0, tzinfo=TAIPEI_TZ))
 async def midnight_scheduler():
@@ -127,9 +125,9 @@ async def midnight_scheduler():
                     )
                     await channel.send(embed=embed_start)
             except Exception as e:
-                print(f"❌ 跨日自動結算發生錯誤: {e}")
+                print(f"❌ 跨日自動結算發生錯誤: {e}", flush=True)
 
-@bot.tree.command(name="listen", description="在此文字頻道開啟每日聲調笑話偵測功能")
+@bot.tree.command(name="listen", description="在此文字頻道開啟每日聲調笑笑偵測功能")
 async def start_listening(interaction: discord.Interaction):
     channel = interaction.channel
     await save_stats_to_channel(channel, {})
@@ -203,26 +201,28 @@ async def on_message(message):
             times = stats[user_id]["correct"]
             await message.channel.send(f"🎉 {message.author.mention} 成功觸發！你今天在此頻道已經講了 {times} 次每日聲調笑話。")
     except Exception as e:
-        print(f"❌ 訊息監聽攔截錯誤: {e}")
+        print(f"❌ 訊息監聽攔截錯誤: {e}", flush=True)
 
 @bot.event
 async def setup_hook():
-    print("🌐 Discord 已就緒，正在非阻塞啟動背景保活 Flask 網頁伺服器...")
+    print("🌐 Discord 已就緒，正在非阻塞啟動背景保活 Flask 網頁伺服器...", flush=True)
     threading.Thread(target=run_dummy_server, daemon=True).start()
     try:
         await bot.tree.sync()
-        print("✨ 斜線指令全自動同步成功！")
+        print("✨ 斜線指令全自動同步成功！", flush=True)
     except Exception as e:
-        print(f"❌ 同步斜線指令失敗: {e}")
+        print(f"❌ 同步斜線指令失敗: {e}", flush=True)
 
 @bot.event
 async def on_ready():
-    print(f"🤖 機器人 {bot.user.name} 已成功連線至 Discord 網關並正常上線！")
+    # 💡 加上 flush=True，強制壓榨 Render 排空緩衝，讓這行字秒印在日誌畫面上！
+    print(f"🤖 機器人 {bot.user.name} 已成功連線至 Discord 網關並正常上線！", flush=True)
     if not midnight_scheduler.is_running():
         midnight_scheduler.start()
 
 async def main():
     async with bot:
+        print("⏳ 正在安全連線至 Discord Gateway...", flush=True)
         await bot.start(TOKEN)
 
 if __name__ == "__main__":
