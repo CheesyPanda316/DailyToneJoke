@@ -73,15 +73,29 @@ def load_all_data():
     try:
         with open(DB_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
+            # 🛡️ 強制防錯：如果最外層不是字典，直接重設
+            if not isinstance(data, dict):
+                return {}
+                
             for cid in list(data.keys()):
-                if isinstance(data[cid], dict) and "enabled" not in data[cid]:
+                # 🛡️ 確保每個頻道的設定都必須是字典格式，否則強制初始化
+                if not isinstance(data[cid], dict):
+                    data[cid] = {"enabled": True, "scores": {}}
+                    continue
+                    
+                if "enabled" not in data[cid]:
                     if "name" in data[cid] and "correct" in data[cid]:
                         data[cid] = {"enabled": True, "scores": {}}
                     else:
                         data[cid] = {"enabled": True, "scores": data[cid]}
+                        
+                # 🛡️ 確保 scores 欄位也一定是字典
+                if "scores" not in data[cid] or not isinstance(data[cid]["scores"], dict):
+                    data[cid]["scores"] = {}
+                    
             return data
     except Exception as e:
-        print(f"❌ 讀取資料庫檔案失敗: {e}", flush=True)
+        print(f"❌ 讀取資料庫檔案失敗，已自動重設: {e}", flush=True)
         return {}
 
 def save_all_data(data):
