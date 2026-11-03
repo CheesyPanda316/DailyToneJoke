@@ -196,25 +196,43 @@ async def check_tone(interaction: discord.Interaction, text: str):
 
 @bot.tree.command(name="leaderboard", description="查看本頻道今日即時挑戰排行榜")
 async def leaderboard(interaction: discord.Interaction):
+    # 1. 優先回覆 interaction 避免 3 秒超時
+    await interaction.response.defer(ephemeral=False)
+    
     channel_id_str = str(interaction.channel_id)
-    db_data = load_all_data()
+    
+    # 2. 安全加鎖讀取資料庫
+    async with db_lock:
+        db_data = load_all_data()
     
     if channel_id_str not in db_data or not isinstance(db_data[channel_id_str], dict) or not db_data[channel_id_str].get("enabled", False):
-        await interaction.response.send_message("❌ 此頻道尚未啟用聲調偵測功能，請先輸入 `/listen` 啟用。", ephemeral=True)
+        await interaction.followup.send("❌ 此頻道尚未啟用聲調偵測功能，請先輸入 `/listen` 啟用。", ephemeral=True)
         return
         
     scores = db_data[channel_id_str].get("scores", {})
     if not scores:
-        await interaction.response.send_message("📊 今天新一輪的挑戰還沒有人上榜喔！快來搶頭香！")
+        await interaction.followup.send("📊 今天新一輪的挑戰還沒有人上榜喔！快來搶頭香！")
         return
     
+    # 3. 安全獲取頻道名稱（如果抓不到名稱，就顯示「本頻道」避免程式崩潰）
+    channel_name = "本頻道"
+    if interaction.channel and hasattr(interaction.channel, "name"):
+        channel_name = f"#{interaction.channel.name}"
+    elif interaction.guild:
+        # 如果 interaction.channel 是 partial，嘗試從伺服器快取抓取完整頻道
+        fetched_channel = interaction.guild.get_channel(interaction.channel_id)
+        if fetched_channel:
+            channel_name = f"#{fetched_channel.name}"
+    
     sorted_stats = sorted(scores.items(), key=lambda x: x["correct"], reverse=True)
-    leaderboard_text = f"🏆 **【 #{interaction.channel.name} 今日即時挑戰排行榜 】** 🏆\n"
+    leaderboard_text = f"🏆 **【 {channel_name} 今日即時挑戰排行榜 】** 🏆\n"
     leaderboard_text += "（每天 00:00 將會自動結算並重設歸零）\n"
     leaderboard_text += "───────────────────\n"
     for index, (user_id, info) in enumerate(sorted_stats[:10], start=1):
         leaderboard_text += f"第 {index} 名 ｜ {info['name']} ── 💥 今日已觸發 **{info['correct']}** 次！\n"
-    await interaction.response.send_message(leaderboard_text)
+        
+    # 4. 使用 followup.send 發送延遲回覆的訊息
+    await interaction.followup.send(leaderboard_text)
 
 # 🛠️ 頻道管理權限專屬：手動幫指定使用者增加分數指令
 @bot.tree.command(name="add_score", description="🛠️ 管理員指令：手動調整此頻道特定使用者的今日造句次數")
