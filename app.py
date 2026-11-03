@@ -359,6 +359,10 @@ async def main():
 
 if __name__ == "__main__":
     try:
+        # 🚨 暴力修復核心：啟動時強制重置並清空壞掉的資料庫檔案
+        print("🧹 正在強制初始化並清空損毀的資料庫檔案...", flush=True)
+        save_all_data({}) 
+        
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
