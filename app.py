@@ -239,12 +239,14 @@ async def leaderboard(interaction: discord.Interaction):
             if fetched_channel:
                 channel_name = f"#{fetched_channel.name}"
         
-        sorted_stats = sorted(scores.items(), key=lambda x: x["correct"], reverse=True)
+        sorted_stats = sorted(scores.items(), key=lambda x: x[1].get("correct", 0), reverse=True)
         leaderboard_text = f"🏆 **【 {channel_name} 今日即時挑戰排行榜 】** 🏆\n"
         leaderboard_text += "（每天 00:00 將會自動結算並重設歸零）\n"
         leaderboard_text += "───────────────────\n"
         for index, (user_id, info) in enumerate(sorted_stats[:10], start=1):
-            leaderboard_text += f"第 {index} 名 ｜ {info['name']} ── 💥 今日已觸發 **{info['correct']}** 次！\n"
+            user_name = info.get("name", "未知用戶")
+            correct_count = info.get("correct", 0)
+            leaderboard_text += f"第 {index} 名 ｜ {user_name} ── 💥 今日已觸發 **{correct_count}** 次！\n"
             
         # 🛡️ 步驟 4：因為前面用了 defer()，這裡必須用 followup.send 發送
         await interaction.followup.send(leaderboard_text)
