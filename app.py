@@ -212,7 +212,7 @@ async def check_tone(interaction: discord.Interaction, text: str):
 @bot.tree.command(name="leaderboard", description="查看本頻道今日即時挑戰排行榜")
 async def leaderboard(interaction: discord.Interaction):
     try:
-        # 🛡️ 步驟 1：立刻告訴 Discord 我正在處理，避免 3 秒超時卡死
+        # 🛡️ 步驟 1：【必須放在第一行】立刻宣告延遲，確保絕對不會超過 3 秒超時！
         await interaction.response.defer(ephemeral=False)
         
         channel_id_str = str(interaction.channel_id)
@@ -230,7 +230,7 @@ async def leaderboard(interaction: discord.Interaction):
             await interaction.followup.send("📊 今天新一輪的挑戰還沒有人上榜喔！快來搶頭香！")
             return
         
-        # 🛡️ 步驟 3：安全獲取頻道名稱（防止 partial channel 沒有 .name 屬性導致卡死）
+        # 🛡️ 步驟 3：安全獲取頻道名稱
         channel_name = "本頻道"
         if interaction.channel and hasattr(interaction.channel, "name"):
             channel_name = f"#{interaction.channel.name}"
@@ -239,22 +239,26 @@ async def leaderboard(interaction: discord.Interaction):
             if fetched_channel:
                 channel_name = f"#{fetched_channel.name}"
         
+        # 💡 步驟 4：【修正核心】x 是 (user_id, info)，必須用 x[1].get() 才能正確取得分數！
         sorted_stats = sorted(scores.items(), key=lambda x: x[1].get("correct", 0), reverse=True)
+        
         leaderboard_text = f"🏆 **【 {channel_name} 今日即時挑戰排行榜 】** 🏆\n"
         leaderboard_text += "（每天 00:00 將會自動結算並重設歸零）\n"
         leaderboard_text += "───────────────────\n"
+        
+        # 💡 步驟 5：使用安全解包與 .get()，避免因為欄位缺失導致噴錯
         for index, (user_id, info) in enumerate(sorted_stats[:10], start=1):
             user_name = info.get("name", "未知用戶")
             correct_count = info.get("correct", 0)
             leaderboard_text += f"第 {index} 名 ｜ {user_name} ── 💥 今日已觸發 **{correct_count}** 次！\n"
             
-        # 🛡️ 步驟 4：因為前面用了 defer()，這裡必須用 followup.send 發送
+        # 🛡️ 步驟 6：因為前面用了 defer()，這裡必須用 followup.send 發送
         await interaction.followup.send(leaderboard_text)
 
     except Exception as e:
-        # 🚨 終極防護：如果中間任何地方出錯，直接把錯誤回傳到 Discord 畫面上，不抓瞎！
         print(f"❌ /leaderboard 指令執行失敗: {e}", flush=True)
         try:
+            # 發生錯誤時，改用 followup.send 回傳
             await interaction.followup.send(f"⚠️ 機器人執行指令時發生內部錯誤：`{str(e)}`")
         except Exception:
             pass
