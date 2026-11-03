@@ -149,10 +149,11 @@ async def midnight_scheduler():
                     color=0xf1c40f
                 )
                 if scores:
-                    sorted_stats = sorted(scores.items(), key=lambda x: x["correct"], reverse=True)
+                    # 💡 【修正核心】x 是 (user_id, info)，所以要用 x[1]["correct"] 才能正確取得分數！
+                    sorted_stats = sorted(scores.items(), key=lambda x: x[1].get("correct", 0), reverse=True)
                     leaderboard_text = ""
                     for index, (user_id, info) in enumerate(sorted_stats[:10], start=1):
-                        leaderboard_text += f"🥇 第 {index} 名 ｜ {info['name']} ── 💥 成功觸發 **{info['correct']}** 次！\n"
+                        leaderboard_text += f"🥇 第 {index} 名 ｜ {info.get('name', '未知用戶')} ── 💥 成功觸發 **{info.get('correct', 0)}** 次！\n"
                     embed_end.description += f"\n{leaderboard_text}"
                 else:
                     embed_end.description += "\n😭 昨天竟然沒有人挑戰成功，大家都太害羞了！"
